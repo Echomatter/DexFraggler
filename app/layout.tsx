@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "DexFraggler — FM waveform laboratory",
-  description: "Fit saw, square and triangle waveforms to a six-operator DX7 core.",
+  title: "DexFraggler — DX7 wavetable map",
+  description: "Anchor a waveform path across 32 slices and solve it through all 32 DX7 algorithms.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

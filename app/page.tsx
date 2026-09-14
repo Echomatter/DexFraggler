@@ -1,1 +1,1 @@
-export {default} from './lab';
+export {default} from './wavetable';

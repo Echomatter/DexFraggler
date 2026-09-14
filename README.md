@@ -1,6 +1,12 @@
 # DexFraggler
 
-A private Sites workbench and a persistent Windows compute runner for constrained DX7 inverse synthesis. The original FM1_WaveLab directory is preserved. Eleven unique saved champions were imported with provenance and re-scored.
+A private Sites workbench for a 32-algorithm × 32-slice DX7 patch table. One persistent Windows runner searches the entire map. The original FM1_WaveLab directory is preserved. All 1,024 patches from its live board (revision 1625, captured 2026-09-14 02:26:28 UTC) were retained as seeds with historical provenance. The three earlier waveform studies remain under `/studies` as an archive.
+
+## The map
+
+Algorithms are fixed rows; slices are fixed columns. Click a column or cell to set an anchor. Defaults: Triangle at 1, Square at 16, Saw at 32. Add sine or custom single-cycle JSON anchors anywhere. Between anchors, blend normalized complex Fourier coefficients and normalize the result; outside them, hold the nearest anchor. Default fundamentals share sine phase; custom cycles preserve supplied phase. Short input cycles are limited to their source Nyquist. Invalid or silent target paths are rejected before saving.
+
+Every row searches legal tuning, level and feedback values with its algorithm fixed. One scheduler visits each cell once per pass, anchors first, using same-row neighbors and compatible interpolation as seeds. Failed cells get a five-minute retry delay. Changing targets invalidates only affected scores, preserves patches, and cancels the active lease. Ranked and absolute map colors only use current scores. Historical scores never color the new map.
 
 ## The important distinction
 
@@ -12,13 +18,14 @@ The solver uses harmonic seeds, bounded damped least squares for levels, nonnega
 
 - `npm run dev`: local workbench, with simulated ChatGPT sign-in on loopback.
 - `npm run build`: Sites-compatible Cloudflare Worker build.
-- `node --test tests/core.test.mjs`: mathematical/codec/native regression tests.
+- `node --test tests/core.test.mjs tests/table.test.mjs`: mathematical, map, codec and native regression tests.
+- `node tests/table-api.mjs`: local table persistence, import, lease and stale-result tests while the development server is running.
 - `node tests/api-integration.mjs`: real local D1 API integration tests while the development server is running.
 - `node runner/background.mjs`: persistent search, configured by ignored `.runtime/runner-config.json`.
 - `powershell -File runner/install-startup.ps1`: resume after Windows sign-in.
 - `powershell -File runner/install-startup.ps1 -Remove`: disable automatic startup.
 
-Pause each experiment in the Site to stop its computation. This PC must be running and connected for search progress to reach the Site. Closing the browser is safe. The runner keeps local recovery checkpoints, native champions, and logs under `.runtime/`, retries transient failures, and uses unique claim tokens plus optimistic revisions to reject stale writes.
+Pause the table in the Site to stop its computation. This PC must be running and connected for search progress to reach the Site. Closing the browser is safe. The runner keeps a local recovery checkpoint and logs under `.runtime/`, retries failures, and uses unique claim tokens plus target generations to reject stale writes. The startup shortcut still calls `runner/background.mjs`, which now starts the table scheduler.
 
 The runner configuration contains the private Site URL, a Sites bypass credential, and its dedicated server secret. It is intentionally excluded from Git and publication. Do not share it. Hosted runtime secrets are configured in Sites, never in `.openai/hosting.json`.
 
@@ -28,9 +35,11 @@ The runner configuration contains the private Site URL, a Sites bypass credentia
 
 ## State and portability
 
-D1 migrations under `drizzle/` own the schema. Site data are authoritative. Browser storage is not used for experiment persistence. JSON exports preserve the complete current state and native measurement. Import re-scores candidates (including the native champion); it does not restore trusted historical evaluation counts. Legacy individual best files, arrays, and table files up to 5 MB are accepted; imports select at most 64 distinct candidates, taking highest legacy-scored entries from large tables. Native measurements are repeated after import.
+D1 migrations under `drizzle/` own the schema. Site data are authoritative. JSON table backups retain the target configuration, model/native champion patches and historical provenance, without bloating the export with all captured audio and internal trial states. Import accepts all 1,024 cells in bounded batches; candidates are re-scored, and imported scores are untrusted. The original live-board snapshot is retained separately in the adjacent `Dexfraggler-audit` directory; its normalized seed file SHA256 is `21e9588b38ce93aaf7286c796f6ce139b951e82e9cec3554fb380779a6af88a7`.
 
-WebMCP exposes `get_experiment`, `select_target`, and `set_search_running` to supported ChatGPT browsers. All three were exercised in the local browser, including invalid inputs and state read-back. Sites hosting is private; this implementation does not change its audience.
+Export a single VCED patch, a complete algorithm row or slice column as a standard 32-voice VMEM bank (4,104 bytes), or the complete table JSON. Incomplete banks are rejected. Imported 32-algorithm banks populate the selected slice; single-algorithm banks populate its row in voice order. Exporting retained patches awaiting remeasurement is allowed and identified. A DX7 patch table is not an additional hardware wavetable playback mode.
+
+WebMCP exposes `get_wavetable`, `select_wavetable_cell`, `set_wavetable_anchor`, and `set_table_running` to supported ChatGPT browsers. All four were exercised in the local browser with valid and invalid inputs and state read-back. Sites hosting remains private. The earlier study page retains its inspection and export capabilities; its separate searches are archived.
 
 ## Scope limits
 
