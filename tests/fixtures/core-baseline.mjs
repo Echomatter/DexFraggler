@@ -1,5 +1,5 @@
-import algorithms from './algorithms.mjs';
-import {sample,targetKey} from './targets.mjs';
+import algorithms from '../../public/algorithms.mjs';
+import {sample,targetKey} from '../../public/targets.mjs';
 export { algorithms };
 export const MODEL='dexfraggler-pm-48k-v1';
 export const SHAPES=['saw','square','triangle'];
@@ -12,104 +12,7 @@ export function amplitude(level){if(level<=1)return 0;const l=clamp(level,0,99);
 export function frequency(op,base=187.5){const log=Math.log2(base);const d=(op.detune-7)*.0209*Math.exp(-.396*log)/7*log;return op.mode?10**((op.coarse%4)+op.fine/100)*2**(Math.max(0,op.detune-7)*13457/16777216):base*(op.coarse===0?.5:op.coarse)*(1+op.fine/100)*2**d}
 export function blank(){return {algorithm:32,feedback:0,operators:Array.from({length:6},(_,i)=>({op:i+1,coarse:1,fine:0,detune:7,mode:0,level:i===0?99:0}))}}
 export function validatePatch(p){if(!p||!Number.isInteger(p.algorithm)||p.algorithm<1||p.algorithm>32||!Number.isInteger(p.feedback)||p.feedback<0||p.feedback>7||!Array.isArray(p.operators)||p.operators.length!==6)throw Error('A patch needs an algorithm (1–32), feedback (0–7) and six operators.');const ids=new Set();const operators=p.operators.map((o,i)=>{const op=o.op??i+1;if(!Number.isInteger(op)||op<1||op>6||ids.has(op))throw Error('Operator numbers must be 1 through 6, without duplicates.');ids.add(op);const v={op,coarse:o.coarse,fine:o.fine,detune:o.detune??7,mode:o.mode??(o.osc_mode==='fixed'?1:0),level:o.level??o.output_level};for(const [k,max] of Object.entries(LIMITS))if(!Number.isInteger(v[k])||v[k]<0||v[k]>max)throw Error(`Operator ${op}: invalid ${k}.`);return v}).sort((a,b)=>a.op-b.op);return {algorithm:p.algorithm,feedback:p.feedback,operators}}
-const K=TAU*2;
-const topology=algorithms.map(spec=>{
-  const sources=Array.from({length:6},()=>[]);
-  for(const [s,t] of spec.edges)sources[t].push(s);
-  const closure=bits=>{let previous;do{previous=bits;for(let i=0;i<6;i++)if(bits&(1<<i))for(const s of sources[i])bits|=1<<s}while(bits!==previous);return bits};
-  const warmMask=closure(1<<spec.feedback[0]);
-  return {...spec,sources,warmMask};
-});
-
-
-export function render(p,n=1024,base=187.5,parts=false){
-  const spec=topology[p.algorithm-1],a=p.operators.map(o=>amplitude(o.level));
-  const w=new Float64Array(6),phase=new Float64Array(6);
-  const inc=p.operators.map(o=>TAU*frequency(o,base)/48000);
-  const output=new Float64Array(n),components=parts?spec.carriers.map(()=>new Float64Array(n)):null;
-  const warm=p.feedback?4096:1024,gain=p.feedback?2**(p.feedback-8-(spec.special?2:0)):0;
-  let prev=0,older=0;
-  for(let t=-warm;t<n;t++){
-    for(let i=5;i>=0;i--){
-      let angle=phase[i];phase[i]=(phase[i]+inc[i])%TAU;
-      if(t<0&&(!gain||!(spec.warmMask&(1<<i))))continue;
-      for(const j of spec.sources[i])angle+=K*a[j]*w[j];
-      if(i===spec.feedback[1])angle+=gain*K*a[spec.feedback[0]]*(prev+older)*.5;
-      w[i]=Math.sin(angle);
-    }
-    older=prev;prev=w[spec.feedback[0]];
-    if(t>=0)for(let c=0;c<spec.carriers.length;c++){
-      const i=spec.carriers[c];output[t]+=a[i]*w[i];if(components)components[c][t]=w[i];
-    }
-  }
-  return parts?{wave:output,components,carriers:spec.carriers}:output;
-}
-
-
-export function amplitudeDerivative(level){
-  if(level<=1||level>99)return 0;
-  const slope=level>=20?1:(low[Math.floor(level)+1]??48)-low[Math.floor(level)];
-  return amplitude(level)*Math.LN2/8*slope;
-}
-
-/** Exact forward-mode six-level derivatives of the smooth PM model. The
- * feedback tangent carries the same two delayed samples as the waveform.
- * Warmup evaluates only operators that feed the feedback loop, while advancing
- * every phase with the identical per-sample recurrence used by render().
- */
-export function renderWithLevelJacobian(p,n=1024,base=187.5){
-  const spec=topology[p.algorithm-1],{sources,carriers}=spec;
-  const a=Float64Array.from(p.operators,o=>amplitude(o.level));
-  const da=Float64Array.from(p.operators,o=>amplitudeDerivative(o.level));
-  const phase=new Float64Array(6),w=new Float64Array(6),dw=new Float64Array(36);
-  const inc=Float64Array.from(p.operators,o=>TAU*frequency(o,base)/48000);
-  const wave=new Float64Array(n),jacobian=Array.from({length:6},()=>new Float64Array(n));
-  const delayed=new Float64Array(6),olderD=new Float64Array(6);
-  const warm=p.feedback?4096:1024,fs=spec.feedback[0],ft=spec.feedback[1];
-  const gain=p.feedback?2**(p.feedback-8-(spec.special?2:0)):0;
-  const fbFactor=gain*K*.5;
-  let prev=0,older=0,finite=true;
-  for(let t=-warm;t<n;t++){
-    for(let i=5;i>=0;i--){
-      const angle0=phase[i];
-      phase[i]=(phase[i]+inc[i])%TAU;
-      if(t<0&&(!gain||!(spec.warmMask&(1<<i))))continue;
-      let angle=angle0;
-      const off=i*6;
-      for(let j=0;j<6;j++)dw[off+j]=0;
-      for(const s of sources[i]){
-        angle+=K*a[s]*w[s];
-        const so=s*6,factor=K*a[s];
-        for(let j=0;j<6;j++)dw[off+j]+=factor*dw[so+j];
-        dw[off+s]+=K*da[s]*w[s];
-      }
-      if(i===ft){
-        // Preserve operation ordering in render() for waveform equivalence.
-        angle+=gain*K*a[fs]*(prev+older)*.5;
-        for(let j=0;j<6;j++)dw[off+j]+=fbFactor*a[fs]*(delayed[j]+olderD[j]);
-        dw[off+fs]+=fbFactor*da[fs]*(prev+older);
-      }
-      w[i]=Math.sin(angle);
-      const cosine=Math.cos(angle);
-      for(let j=0;j<6;j++)dw[off+j]*=cosine;
-    }
-    if(gain){
-      older=prev;prev=w[fs];
-      for(let j=0;j<6;j++){olderD[j]=delayed[j];delayed[j]=dw[fs*6+j]}
-    }
-    if(t>=0)for(const i of carriers){
-      wave[t]+=a[i]*w[i];
-      for(let j=0;j<6;j++)jacobian[j][t]+=a[i]*dw[i*6+j];
-      jacobian[i][t]+=da[i]*w[i];
-    }
-  }
-  // Strong nonlinear feedback may have an unbounded tangent even when its
-  // waveform is bounded. Do not feed nonfinite normal equations to the solver.
-  for(const column of jacobian)for(const x of column)if(!Number.isFinite(x)){finite=false;break}
-  return {wave,jacobian,finite};
-}
-
-
+export function render(p,n=1024,base=187.5,parts=false){const spec=algorithms[p.algorithm-1];const src=Array.from({length:6},()=>[]);for(const [a,b] of spec.edges)src[b].push(a);const a=p.operators.map(o=>amplitude(o.level));const w=new Float64Array(6),phase=new Float64Array(6);const inc=p.operators.map(o=>TAU*frequency(o,base)/48000);const output=new Float64Array(n);const components=parts?spec.carriers.map(()=>new Float64Array(n)):null;const warm=p.feedback?4096:1024;let prev=0,older=0;const gain=p.feedback?2**(p.feedback-8-(spec.special?2:0)):0;for(let t=-warm;t<n;t++){for(let i=5;i>=0;i--){let angle=phase[i];for(const j of src[i])angle+=TAU*2*a[j]*w[j];if(i===spec.feedback[1])angle+=gain*TAU*2*a[spec.feedback[0]]*(prev+older)*.5;w[i]=Math.sin(angle);phase[i]=(phase[i]+inc[i])%TAU}older=prev;prev=w[spec.feedback[0]];if(t>=0)for(let c=0;c<spec.carriers.length;c++){const i=spec.carriers[c];output[t]+=a[i]*w[i];if(components)components[c][t]=w[i]}}return parts?{wave:output,components,carriers:spec.carriers}:output}
 export function fft(real,imag,inverse=false){const n=real.length;for(let i=1,j=0;i<n;i++){let b=n>>1;for(;j&b;b>>=1)j^=b;j^=b;if(i<j){[real[i],real[j]]=[real[j],real[i]];[imag[i],imag[j]]=[imag[j],imag[i]]}}for(let len=2;len<=n;len<<=1){const angle=(inverse?TAU:-TAU)/len;const wr0=Math.cos(angle),wi0=Math.sin(angle);for(let start=0;start<n;start+=len){let wr=1,wi=0;for(let j=0;j<len/2;j++){const a=start+j,b=a+len/2,tr=wr*real[b]-wi*imag[b],ti=wr*imag[b]+wi*real[b];real[b]=real[a]-tr;imag[b]=imag[a]-ti;real[a]+=tr;imag[a]+=ti;const next=wr*wr0-wi*wi0;wi=wr*wi0+wi*wr0;wr=next}}}if(inverse)for(let i=0;i<n;i++){real[i]/=n;imag[i]/=n}}
 const targetCache=new Map();
 export function targetWave(shape,harmonics=32,n=1024,base=187.5,phase=0){if(typeof shape==='object')return Float64Array.from({length:n},(_,i)=>sample(shape,TAU*base*i/48000+phase,harmonics));if(!SHAPES.includes(shape))throw Error('Unknown target.');const wave=new Float64Array(n);for(let i=0;i<n;i++){let y=0;const theta=TAU*base*i/48000+phase;for(let k=1;k<=harmonics;k++){if(shape==='saw')y+=Math.sin(k*theta)/k;else if(k%2)y+=shape==='square'?Math.sin(k*theta)/k:Math.cos(k*theta)/(k*k)}wave[i]=y}return wave}
@@ -122,56 +25,8 @@ function pick(state,list){return list[Math.floor(random(state)*list.length)]}
 function nearestRatio(r){let best=[1,0],distance=Infinity;for(let c=0;c<=31;c++){const b=c||.5;const f=clamp(Math.round((r/b-1)*100),0,99);const d=Math.abs(b*(1+f/100)-r);if(d<distance){distance=d;best=[c,f]}}return best}
 export function interpolate(a,b,f){a=validatePatch(a);b=validatePatch(b);if(a.algorithm!==b.algorithm||a.feedback!==b.feedback)throw Error('Choose two patches with the same algorithm and feedback.');if(!Number.isFinite(f)||f<0||f>1)throw Error('Blend must be between zero and one.');if(f===0)return clone(a);if(f===1)return clone(b);if(JSON.stringify(a)===JSON.stringify(b))return clone(a);const p=clone(a);p.operators.forEach((o,i)=>{const x=b.operators[i];if(o.mode!==x.mode)throw Error('Oscillator modes must agree.');const hz=frequency(o)*(1-f)+frequency(x)*f;if(o.mode){const log=clamp(Math.round(Math.log10(hz)*100),0,399);o.coarse=Math.floor(log/100);o.fine=log%100;o.detune=7}else{[o.coarse,o.fine]=nearestRatio(hz/187.5);o.detune=7}const amp=amplitude(o.level)*(1-f)+amplitude(x.level)*f;let best=0,dist=Infinity;for(let l=0;l<=99;l++){const d=Math.abs(amplitude(l)-amp);if(d<dist){best=l;dist=d}}o.level=best});return validatePatch(p)}
 function proposal(state,shape){if(typeof shape==='object')shape=state.seedCursor%2?'saw':'square';const v=state.seedCursor??0;let p;if(v<256||random(state)<.22){state.seedCursor=v+1;p=blank();p.algorithm=state.algorithm||(v%32)+1;p.feedback=state.algorithm?v%8:Math.floor(v/32)%8;const spec=algorithms[p.algorithm-1];for(const o of p.operators){o.level=spec.carriers.includes(o.op-1)?pick(state,[75,87,99]):pick(state,[0,45,60,70,80]);o.coarse=spec.carriers.includes(o.op-1)?pick(state,[1,1,1,2,3]):pick(state,shape==='saw'?[1,1,2,3,4,5,7]:[2,2,4,6,8])}if(p.algorithm===32){p.feedback=0;p.operators.forEach((o,i)=>{o.coarse=shape==='saw'?i+1:2*i+1;o.level=clamp(Math.round(99-8*Math.log2(o.coarse)*(shape==='triangle'?2:1)),0,99)})}}else{const pool=random(state)<.7?state.elites.slice(0,4):state.elites;p=clone(pick(state,pool).patch);if(random(state)<.1&&pool.length>1){const b=pick(state,pool).patch;if(b.algorithm===p.algorithm&&b.feedback===p.feedback)p=interpolate(p,b,random(state))}const o=pick(state,p.operators),r=random(state);if(r<.55)o.level=clamp(o.level+pick(state,[-16,-8,-4,-2,-1,1,2,4,8,16]),0,99);else if(r<.76)o.coarse=pick(state,[0,1,1,2,3,4,5,6,7,8,9,11,13,15,17,23,31]);else if(r<.89)o.fine=clamp(o.fine+pick(state,[-10,-2,-1,1,2,10]),0,99);else if(r<.96)p.feedback=pick(state,[0,1,2,3,4,5,6,7]);else if(state.allowDetune)o.detune=pick(state,[0,4,6,7,8,10,14]);else if(!state.algorithm)p.algorithm=1+Math.floor(random(state)*32)}return p}
-function solveLinear(A,b){
-  const n=b.length,M=A.map((row,i)=>[...row,b[i]]);
-  for(let i=0;i<n;i++){
-    let pivot=i;for(let j=i+1;j<n;j++)if(Math.abs(M[j][i])>Math.abs(M[pivot][i]))pivot=j;
-    [M[i],M[pivot]]=[M[pivot],M[i]];
-    const d=M[i][i];if(!Number.isFinite(d)||Math.abs(d)<1e-20)return null;
-    for(let k=i;k<=n;k++)M[i][k]/=d;
-    for(let j=0;j<n;j++)if(j!==i){const q=M[j][i];for(let k=i;k<=n;k++)M[j][k]-=q*M[i][k]}
-  }
-  const result=M.map(row=>row[n]);return result.every(Number.isFinite)?result:null;
-}
-
-
-export function fitLevels(p,shape,h=32){
-  p=clone(p);
-  const {wave,jacobian:J,finite}=renderWithLevelJacobian(p);
-  if(!finite)return p;
-  const m=analyze(wave,shape,h),target=targetWave(shape,h),n=wave.length;
-  if(m.scale<=1e-12)return p;
-  let mean=0,energy=0;
-  for(const x of wave)mean+=x/n;
-  const centered=Float64Array.from(wave,x=>x-mean);
-  for(const x of centered)energy+=x*x;
-  const res=Float64Array.from(centered,(x,i)=>x*m.scale-target[(i-m.shift+n)%n]);
-  for(let j=0;j<6;j++){
-    let dMean=0;for(const x of J[j])dMean+=x/n;
-    let parallel=0;for(let i=0;i<n;i++)parallel+=centered[i]*(J[j][i]-dMean);
-    parallel/=Math.max(energy,1e-20);
-    for(let i=0;i<n;i++)J[j][i]=m.scale*(J[j][i]-dMean-centered[i]*parallel);
-  }
-  const A=Array.from({length:6},()=>Array(6).fill(0)),b=Array(6).fill(0);
-  let maxDiagonal=0;
-  for(let i=0;i<6;i++){
-    for(let j=0;j<=i;j++){let value=0;for(let k=0;k<n;k++)value+=J[i][k]*J[j][k];A[i][j]=A[j][i]=value/n}
-    for(let k=0;k<n;k++)b[i]-=J[i][k]*res[k]/n;
-    maxDiagonal=Math.max(maxDiagonal,A[i][i]);
-  }
-  if(!Number.isFinite(maxDiagonal)||maxDiagonal<1e-20)return p;
-  // A fixed level-space ridge retains useful movement for weakly coupled
-  // columns; purely diagonal damping over-amplified near-null directions in
-  // comparisons. The shared trust radius preserves the solved direction.
-  for(let i=0;i<6;i++)A[i][i]+=.0005;
-  const delta=solveLinear(A,b);
-  if(delta){
-    const length=Math.max(1,...delta.map(x=>Math.abs(x)/8));
-    p.operators.forEach((o,i)=>{o.level=clamp(Math.round(o.level+delta[i]/length),0,99)});
-  }
-  return p;
-}
-
+function solveLinear(A,b){const n=b.length;A=A.map((row,i)=>[...row,b[i]]);for(let i=0;i<n;i++){let pivot=i;for(let j=i+1;j<n;j++)if(Math.abs(A[j][i])>Math.abs(A[pivot][i]))pivot=j;[A[i],A[pivot]]=[A[pivot],A[i]];const d=A[i][i];if(Math.abs(d)<1e-14)return null;for(let k=i;k<=n;k++)A[i][k]/=d;for(let j=0;j<n;j++)if(j!==i){const q=A[j][i];for(let k=i;k<=n;k++)A[j][k]-=q*A[i][k]}}return A.map(row=>row[n])}
+export function fitLevels(p,shape,h=32){p=clone(p);const original=render(p),m=analyze(original,shape,h),target=targetWave(shape,h);const n=original.length,res=Float64Array.from(original,(x,i)=>x*m.scale-target[(i-m.shift+n)%n]);const J=[];for(let o=0;o<6;o++){const v=p.operators[o].level;p.operators[o].level=clamp(v+(v<99?.5:-.5),0,99);const d=p.operators[o].level-v;const w=render(p);J.push(Float64Array.from(w,(x,i)=>(x-original[i])*m.scale/d));p.operators[o].level=v}const A=Array.from({length:6},()=>Array(6).fill(0)),b=Array(6).fill(0);for(let i=0;i<6;i++){for(let j=0;j<=i;j++){let v=0;for(let k=0;k<n;k++)v+=J[i][k]*J[j][k];A[i][j]=A[j][i]=v/n}for(let k=0;k<n;k++)b[i]-=J[i][k]*res[k]/n;A[i][i]+=.0005}const delta=solveLinear(A,b);if(delta)p.operators.forEach((o,i)=>o.level=clamp(Math.round(o.level+clamp(delta[i],-8,8)),0,99));return p}
 export function fitCarriers(p,shape,h=32){p=clone(p);const spec=algorithms[p.algorithm-1];const free=spec.carriers.filter(i=>!(p.feedback&&i===spec.feedback[0])&&!spec.edges.some(([s])=>s===i));if(!free.length)return p;const data=render(p,1024,187.5,true),m=analyze(data.wave,shape,h),target=targetWave(shape,h);let weights=spec.carriers.map(i=>amplitude(p.operators[i].level));const desired=Float64Array.from(target,(_,i)=>target[(i-m.shift+1024)%1024]/Math.max(m.scale,1e-8));for(let pass=0;pass<5;pass++)for(const op of free){const c=spec.carriers.indexOf(op),basis=data.components[c];let numerator=0,denominator=0;for(let i=0;i<1024;i++){let residual=desired[i];for(let j=0;j<weights.length;j++)if(j!==c)residual-=weights[j]*data.components[j][i];numerator+=basis[i]*residual;denominator+=basis[i]*basis[i]}weights[c]=clamp(numerator/Math.max(denominator,1e-10),0,1)}for(const op of free){const weight=weights[spec.carriers.indexOf(op)];let best=0,dist=Infinity;for(let l=0;l<=99;l++){const d=Math.abs(amplitude(l)-weight);if(d<dist){dist=d;best=l}}p.operators[op].level=best}return p}
 export function initialState(shape,seeds=[],h=32,algorithm=0){const state={model:MODEL,shape,algorithm,harmonics:h,evaluations:0,seedCursor:0,rng:(0x9e3779b9+SHAPES.indexOf(shape)*977)>>>0,elites:[],history:[],nativeSeeds:[blank()],allowDetune:false,method:'Harmonic seeds'};const basic=blank();if(algorithm){basic.algorithm=algorithm;state.nativeSeeds=[basic]}consider(state,evaluate(basic,shape,h));if(shape!=='triangle'&&(!algorithm||algorithm===32)){const additive=blank();additive.operators.forEach((o,i)=>{o.coarse=shape==='saw'?i+1:2*i+1;o.level=Math.round(99-8*Math.log2(o.coarse))});state.nativeSeeds.push(additive);consider(state,evaluate(additive,shape,h))}for(const seed of seeds.filter(x=>!algorithm?x.target===shape:x.patch?.algorithm===algorithm)){try{const p=validatePatch(seed.patch);state.nativeSeeds.push(p);consider(state,{...evaluate(p,shape,h),source:seed.source||'Imported patch'})}catch{}}return state}
 function consider(state,item){state.evaluations++;const prev=state.elites[0]?.loss??Infinity;const key=JSON.stringify(item.patch);if(!state.elites.some(x=>JSON.stringify(x.patch)===key)){state.elites.push(item);state.elites.sort((a,b)=>a.loss-b.loss);state.elites=state.elites.slice(0,16)}if(item.loss<prev){state.history.push({at:state.evaluations,error:item.error,score:item.score,time:Date.now()});state.history=state.history.slice(-120)}return item.loss<prev}

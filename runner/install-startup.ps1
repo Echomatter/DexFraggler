@@ -1,14 +1,15 @@
 param([switch]$Remove)
-$taskRoot = Split-Path -Parent $PSScriptRoot
-$startupDir = [Environment]::GetFolderPath('Startup')
-$shortcutFile = Join-Path $startupDir 'DexFraggler background runner.lnk'
-if ($Remove) { if (Test-Path -LiteralPath $shortcutFile) { Remove-Item -LiteralPath $shortcutFile }; Write-Output 'Automatic startup disabled.'; exit }
-$scriptFile = Join-Path $taskRoot 'runner\start-hidden.ps1'
-$shellObject = New-Object -ComObject WScript.Shell
-$shortcut = $shellObject.CreateShortcut($shortcutFile)
-$shortcut.TargetPath = (Get-Command powershell.exe).Source
-$shortcut.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $scriptFile + '"'
-$shortcut.WorkingDirectory = $taskRoot
-$shortcut.WindowStyle = 7
-$shortcut.Save()
-Write-Output 'DexFraggler will resume after Windows sign-in.'
+$ErrorActionPreference = 'Stop'
+$projectRoot = Split-Path -Parent $PSScriptRoot
+if ($Remove) {
+ $shortcutPath = Join-Path ([Environment]::GetFolderPath('Startup')) 'DexFraggler.lnk'
+ if (Test-Path -LiteralPath $shortcutPath) {
+  $shellObject = New-Object -ComObject WScript.Shell
+  $shortcut = $shellObject.CreateShortcut($shortcutPath)
+  if ($shortcut.TargetPath -ne (Join-Path $projectRoot 'desktop\DexFraggler.Tray.exe')) { throw 'This shortcut belongs to another project.' }
+  Remove-Item -LiteralPath $shortcutPath
+ }
+ Write-Output 'Automatic startup disabled.'
+} else {
+ & (Join-Path $projectRoot 'desktop\install-shortcuts.ps1') -ProjectRoot $projectRoot
+}

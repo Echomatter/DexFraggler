@@ -1,1 +1,1 @@
-export {default} from './wavetable';
+export {default} from './table-page';

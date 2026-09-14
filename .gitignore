@@ -51,3 +51,6 @@ next-env.d.ts
 
 *.tsbuildinfo
 /.dev.vars
+/desktop/self-test.json
+/desktop/integration-test.json
+/desktop/integration-probe-*/

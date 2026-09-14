@@ -1,29 +1,250 @@
 import fs from 'node:fs/promises';
-import {fileURLToPath} from 'node:url';
-import {initialState,runBatch,evaluate,interpolate,MODEL} from '../public/core.mjs';
-import {Reference,nativeProposal} from './reference.mjs';
-import {targetKey} from '../public/targets.mjs';
-const root=fileURLToPath(new URL('../',import.meta.url)),config=JSON.parse(await fs.readFile(process.argv[2]||root+'.runtime/runner-config.json','utf8'));
-const sleep=ms=>new Promise(r=>setTimeout(r,ms)),id='Windows background runner';
-let reference=new Reference(),stopping=false,failures=0,activeJob=null;process.on('SIGINT',()=>{stopping=true});process.on('SIGTERM',()=>{stopping=true});
-async function call(body){const r=await fetch(config.url+'/api/table',{method:'POST',headers:{'Content-Type':'application/json',...(config.cookie?{Cookie:config.cookie}:{}),'OAI-Sites-Authorization':'Bearer '+config.bypass,'x-dexfraggler-worker':config.secret},body:JSON.stringify(body),signal:AbortSignal.timeout(25000)});let d;try{d=await r.json()}catch{throw Error(`Site returned ${r.status}`)}if(!r.ok)throw Error(`${r.status}: ${d.error}`);return d}
-async function checkpoint(data){const path=root+'.runtime/table-checkpoint.json',temp=path+'.'+process.pid+'.tmp';await fs.writeFile(temp,JSON.stringify(data));for(let i=0;;i++)try{await fs.rename(temp,path);break}catch(e){if(i>=8||!['EPERM','EBUSY','EACCES'].includes(e.code))throw e;await sleep(30*(i+1))}}
-console.log(new Date().toISOString(),'Table scheduler started: one compute lane, 1,024 cells.');
-while(!stopping)try{
- await call({action:'heartbeat',worker:id});const worker=id+' '+crypto.randomUUID(),{job}=await call({action:'claim',worker});if(!job){await sleep(5000);continue}activeJob={id:job.id,generation:job.generation,worker};
- const {cell,target,config:c}=job,current=cell?.target_key===job.targetKey;
- let seeds=[...(cell?.seeds??[]),...(cell?.state?.elites?.map(e=>e.patch)??[]),cell?.reference?.patch,cell?.patch,...job.neighbors.map(n=>n.patch)].filter(p=>p?.algorithm===job.algorithm);
- const left=job.neighbors.filter(n=>n.id<job.id).sort((a,b)=>b.id-a.id)[0],right=job.neighbors.filter(n=>n.id>job.id).sort((a,b)=>a.id-b.id)[0];if(left&&right)try{seeds.push(interpolate(left.patch,right.patch,(job.id-left.id)/(right.id-left.id)))}catch{}
- let state=current&&cell.state?.model===MODEL?cell.state:initialState(target,seeds.map(patch=>({patch})),c.harmonics,job.algorithm);state.allowDetune=c.allowDetune;
- let best=current?cell.reference:null;
- try{const saved=JSON.parse(await fs.readFile(root+'.runtime/table-checkpoint.json','utf8'));if(saved.id===job.id&&saved.generation===job.generation&&saved.cellRevision===(cell?.revision??0)&&targetKey(saved.state.shape)===job.targetKey){state=saved.state;best=saved.reference}}catch{}
- for(const p of seeds.slice(0,20)){const item=evaluate(p,target,c.harmonics);state.evaluations++;if(!state.elites.some(e=>JSON.stringify(e.patch)===JSON.stringify(p)))state.elites.push(item)}state.elites.sort((a,b)=>a.loss-b.loss);state.elites=state.elites.slice(0,16);state=runBatch(state,350);state.nativeSeeds=seeds.slice(0,32);
- let checked=state.nativeChecked??[],count=state.nativeCount??0,measured=0;
- for(const p of [state.elites[0].patch,...seeds]){const key=JSON.stringify(p);if(checked.includes(key))continue;const result=await reference.score(p,target,c.harmonics);if(!best||result.loss<best.loss)best=result;checked.push(key);if(++measured>=3)break}
- if(!best)best=await reference.score(state.elites[0].patch,target,c.harmonics);
- const until=Date.now()+550;while(Date.now()<until&&!stopping){const p=nativeProposal(count%8===0?state.elites[Math.floor(count/8)%state.elites.length].patch:best.patch,count++,c.allowDetune),result=await reference.score(p,target,c.harmonics);if(result.loss<best.loss)best=result}
- state.nativeCount=count;state.nativeChecked=checked.slice(-48);
- await checkpoint({id:job.id,generation:job.generation,cellRevision:cell?.revision??0,state,reference:best});await call({action:'checkpoint',id:job.id,generation:job.generation,worker,state,reference:best});
- console.log(new Date().toISOString(),`A${job.algorithm} S${job.slot+1}`,`visits ${current?cell.visits+1:1}`,`native ${best.score.toFixed(6)}`,`candidates ${state.evaluations}`);activeJob=null;failures=0;await sleep(300);
-}catch(e){if(activeJob)try{await call({action:'failed',...activeJob,error:e.message})}catch{}activeJob=null;if(!reference.healthy){reference.close();reference=new Reference()}console.error(new Date().toISOString(),e.message);await sleep(Math.min(60000,5000*++failures))}
-reference.close();console.log('Table scheduler stopped; saved work retained.');
+import path from 'node:path';
+import os from 'node:os';
+import {randomUUID} from 'node:crypto';
+import {fileURLToPath,pathToFileURL} from 'node:url';
+
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const WORKER='Windows tray runner';
+const PRIORITIES={Idle:19,BelowNormal:10,Normal:0,AboveNormal:-7,High:-14};
+export function normalizePriority(value){return Object.keys(PRIORITIES).find(k=>k.toLowerCase()===String(value).replace(/[ _-]/g,'').toLowerCase())??'BelowNormal'}
+const patchKey=p=>JSON.stringify(p);
+const finite=x=>typeof x==='number'&&Number.isFinite(x);
+
+export async function atomicJson(filename,value){
+  const temp=filename+'.'+process.pid+'.'+randomUUID()+'.tmp';
+  await fs.writeFile(temp,JSON.stringify(value));
+  try{for(let attempt=0;;attempt++)try{await fs.rename(temp,filename);break}catch(e){if(attempt>=8||!['EPERM','EBUSY','EACCES'].includes(e.code))throw e;await sleep(20*(attempt+1))}}
+  finally{await fs.unlink(temp).catch(()=>{})}
+}
+
+/** Keep only legal champion results when constructing fresh optimizer mechanics.
+ * Existing search counters are retained solely for monotonic checkpointing.
+ */
+export function restoreState(core,target,key,config,algorithm,cell,cached){
+  const current=cell&&(cell.current??cell.target_key===key);
+  const legal=p=>{try{return core.validatePatch(p).algorithm===algorithm}catch{return false}};
+  const seeds=[cell?.patch,cell?.reference?.patch,cell?.state?.elites?.[0]?.patch,...(cell?.seeds??[])].filter(legal);
+  let state=cached?.model===core.MODEL&&patchKey(cached.shape)===key?cached:core.initialState(target,seeds.map(patch=>({patch})),config.harmonics,algorithm);
+  state.allowDetune=config.allowDetune;
+  state.nativeSeeds=seeds.slice(0,32);
+  if(current){
+    state.evaluations=Math.max(state.evaluations,Number(cell.evaluations)||0,Number(cell.state?.evaluations)||0);
+    const champion=cell.state?.model===core.MODEL?cell.state.elites?.[0]:null;
+    if(champion&&legal(champion.patch)&&finite(champion.loss)&&finite(champion.score)){
+      const same=state.elites.findIndex(e=>patchKey(e.patch)===patchKey(champion.patch));
+      if(same>=0&&state.elites[same].loss>champion.loss)state.elites.splice(same,1);
+      if(same<0||!state.elites.some(e=>patchKey(e.patch)===patchKey(champion.patch)))state.elites.push(core.clone(champion));
+      state.elites.sort((a,b)=>a.loss-b.loss);state.elites=state.elites.slice(0,16);
+    }
+  }
+  // Imports arrive independently of optimizer memory. Evaluate fresh explicit
+  // seeds even when this row already has a cached optimizer; never let the next
+  // checkpoint erase a newly imported patch without considering it.
+  for(const patch of (cell?.seeds??[]).filter(legal))if(!state.elites.some(e=>patchKey(e.patch)===patchKey(patch)))addModelCandidate(state,core.evaluate(patch,target,config.harmonics));
+  return state;
+}
+
+export function addModelCandidate(state,item){
+  state.evaluations++;
+  const previous=state.elites[0]?.loss??Infinity,key=patchKey(item.patch);
+  if(!state.elites.some(e=>patchKey(e.patch)===key)){
+    state.elites.push(item);state.elites.sort((a,b)=>a.loss-b.loss);state.elites=state.elites.slice(0,16);
+  }
+  if(item.loss<previous){state.history.push({at:state.evaluations,error:item.error,score:item.score,time:Date.now()});state.history=state.history.slice(-120)}
+  return item.loss<previous;
+}
+
+function completeReference(r){return r?.engine==='Dexed Mark I / native'&&finite(r.loss)&&finite(r.score)&&Array.isArray(r.notes)&&r.notes.length===3&&r.notes.every(n=>Array.isArray(n.wave)&&Array.isArray(n.target))}
+
+/** One asynchronous compute lane; no worker is attached to an individual cell.
+ * The cloud selects the least-visited focus. Every native capture is compared
+ * with all 32 targets in its algorithm row before another capture is rendered.
+ */
+export async function runTableRunner(options={}){
+  const root=path.resolve(options.root??fileURLToPath(new URL('../',import.meta.url)));
+  const config=options.config??JSON.parse(await fs.readFile(options.configPath??path.join(root,'.runtime','runner-config.json'),'utf8'));
+  const runtimeDir=path.resolve(root,config.runtimeDir??'.runtime');
+  await fs.mkdir(runtimeDir,{recursive:true});
+  const core=options.core??await import(pathToFileURL(path.join(root,'public','core.mjs')));
+  const native=options.native??await import(pathToFileURL(path.join(root,'runner','reference.mjs')));
+  const createReference=()=>options.createReference?options.createReference():new native.Reference();
+  const log=options.log??console.log,errorLog=options.errorLog??console.error;
+  const started=Date.now(),processStartTime=new Date(started-process.uptime()*1000).toISOString();
+  const statusFile=path.join(runtimeDir,'runner-status.json'),controlFile=path.join(runtimeDir,'runner-control.json');
+  let reference=createReference(),stopping=false,active=null,failures=0,phase='Starting',cloudRunning=false;
+  let localPaused=false,priority='BelowNormal',requestedPriority='BelowNormal',priorityError=null;
+  let totalEvaluations=0,lastWrite=0,lastHeartbeat=0,ticking=false;
+  const changedAt=new Map(),rows=new Map();
+  const rowBudget=Math.max(500,Math.min(6000,config.rowBudgetMs??2800));
+  const renewalControllers=new Set(),renewIntervalMs=options.renewIntervalMs??30000;
+  const stop=()=>{stopping=true};
+  process.on('SIGINT',stop);process.on('SIGTERM',stop);
+  if(options.signal)options.signal.addEventListener('abort',stop,{once:true});
+
+  const cellsPerMinute=()=>{const now=Date.now();for(const [id,time] of changedAt)if(now-time>60000)changedAt.delete(id);return Math.round(changedAt.size*60000/Math.max(5000,Math.min(60000,now-started)))};
+  const compactStatus=()=>({priority,phase,cellsPerMinute:cellsPerMinute(),localPaused,running:cloudRunning&&!localPaused});
+  const publish=async(force=false)=>{
+    if(!force&&Date.now()-lastWrite<750)return;
+    lastWrite=Date.now();
+    await atomicJson(statusFile,{pid:process.pid,nativePid:reference.child?.pid??null,nativeProcessStartTime:reference.startedAt??null,processStartTime,root,running:cloudRunning&&!localPaused&&!stopping,localPaused,priority,phase,updatedAt:Date.now(),evaluations:totalEvaluations,cellsPerMinute:cellsPerMinute(),activeId:active?.job.id??null,priorityError});
+  };
+  const request=async(body,signal)=>{
+    if(options.request)return options.request(body,signal);
+    const timeout=AbortSignal.timeout(25000);
+    const response=await fetch(config.url+'/api/table',{method:'POST',headers:{'Content-Type':'application/json',...(config.cookie?{Cookie:config.cookie}:{}),'OAI-Sites-Authorization':'Bearer '+config.bypass,'x-dexfraggler-worker':config.secret},body:JSON.stringify(body),signal:signal?AbortSignal.any([signal,timeout]):timeout});
+    let data;try{data=await response.json()}catch{throw Object.assign(Error(`Site returned ${response.status}`),{status:response.status})}
+    if(!response.ok)throw Object.assign(Error(`${response.status}: ${data.error}`),{status:response.status});
+    return data;
+  };
+  const tick=async()=>{
+    if(ticking)return;ticking=true;
+    try{
+      try{const value=JSON.parse(await fs.readFile(controlFile,'utf8'));if(typeof value.paused==='boolean')localPaused=value.paused;if(value.priority!==undefined)requestedPriority=normalizePriority(value.priority)}catch(e){if(e.code!=='ENOENT'&&!(e instanceof SyntaxError))priorityError=e.message}
+      if(priority!==requestedPriority||!lastWrite){
+        try{os.setPriority(process.pid,PRIORITIES[requestedPriority]);priority=requestedPriority;priorityError=null}catch(e){priorityError=e.message}
+      }
+      // Apply to the owned native child too, including a replacement renderer.
+      if(reference.child?.pid)try{if(os.getPriority(reference.child.pid)!==PRIORITIES[priority])os.setPriority(reference.child.pid,PRIORITIES[priority])}catch{}
+      if(localPaused&&!active)phase='Paused on this computer';
+      if(active&&Date.now()-active.lastRenew>=renewIntervalMs&&!active.invalid&&!active.renewing){
+        const lease=active;lease.lastRenew=Date.now();
+        const controller=new AbortController();lease.renewalController=controller;lease.renewing=true;renewalControllers.add(controller);
+        // Renewal network latency must never hold the local control/status
+        // polling lock. The unique lease object receives its own response.
+        void (async()=>{
+          try{const result=await request({action:'renew',worker:lease.worker,id:lease.job.id,generation:lease.job.generation},controller.signal);if(result.running===false)lease.invalid=true}
+          catch(e){if(e.status===409)lease.invalid=true;else if(!controller.signal.aborted)lease.renewalError=e.message}
+          finally{lease.renewing=false;renewalControllers.delete(controller)}
+        })();
+      }
+      await publish();
+    }finally{ticking=false}
+  };
+  const timer=setInterval(()=>{tick().catch(e=>errorLog(new Date().toISOString(),'Status update:',e.message))},250);
+  const responsiveSleep=async ms=>{const until=Date.now()+ms;while(!stopping&&Date.now()<until)await sleep(Math.min(250,until-Date.now()))};
+  const heartbeat=async()=>{if(Date.now()-lastHeartbeat<5000)return;lastHeartbeat=Date.now();await request({action:'heartbeat',worker:WORKER,status:compactStatus()})};
+  const assertLease=()=>{if(active?.invalid)throw Object.assign(Error('Search batch superseded.'),{status:409})};
+
+  async function solveRow(job,worker){
+    const rowStart=(job.algorithm-1)*32,focus=job.id%32,signature=JSON.stringify([job.generation,job.targetKeys]);
+    let row=rows.get(job.algorithm);
+    if(row?.signature!==signature){row={signature,generation:job.generation,states:new Map(),best:new Map(),checked:new Set(),count:0};rows.set(job.algorithm,row)}
+    const cells=new Map((job.cells??[]).map(c=>[Number(c.id),c])),dirty=new Set(),consumed=new Map(),pendingSeeds=new Map();
+    for(const cell of cells.values())for(const patch of cell.seeds??[]){
+      const key=patchKey(patch);if(!pendingSeeds.has(key))pendingSeeds.set(key,[]);
+      pendingSeeds.get(key).push({slot:cell.id%32,patch});
+    }
+    const consume=key=>{for(const {slot,patch} of pendingSeeds.get(key)??[]){if(!consumed.has(slot))consumed.set(slot,new Map());consumed.get(slot).set(key,patch);dirty.add(slot)}};
+    let didWork=false;
+    for(let slot=0;slot<32;slot++){
+      const id=rowStart+slot,cell=cells.get(id),key=job.targetKeys[slot];
+      row.states.set(slot,restoreState(core,job.targets[slot],key,job.config,job.algorithm,cell,row.states.get(slot)));
+      const current=cell&&(cell.current??cell.target_key===key),remote=current&&completeReference(cell.reference)?cell.reference:null;
+      if(remote&&(!row.best.get(slot)||remote.loss<row.best.get(slot).loss))row.best.set(slot,remote);
+      if(slot%8===7)await sleep(0);
+    }
+    // Keep only search memory for the present table generation.
+    for(const [algorithm,other] of rows)if(other.generation!==job.generation)rows.delete(algorithm);
+    let state=row.states.get(focus);
+    phase=`Scanning algorithm ${job.algorithm}, slice ${focus+1}`;
+    for(let pass=0;pass<2&&!stopping&&!localPaused;pass++){
+      assertLease();const before=state.evaluations;state=core.runBatch(state,75);totalEvaluations+=state.evaluations-before;row.states.set(focus,state);dirty.add(focus);didWork=true;await sleep(0);
+    }
+    const seeds=[];
+    const add=p=>{if(p?.algorithm===job.algorithm&&!seeds.some(x=>patchKey(x)===patchKey(p)))seeds.push(p)};
+    // Imports have priority over general proposals. A partially processed row
+    // acknowledges only seeds whose native capture was actually compared.
+    for(const patch of cells.get(job.id)?.seeds??[])add(patch);
+    for(const cell of cells.values())for(const patch of cell.seeds??[])add(patch);
+    add(state.elites[0]?.patch);add(row.best.get(focus)?.patch);add(cells.get(job.id)?.reference?.patch);add(cells.get(job.id)?.patch);
+    const ranked=Array.from({length:32},(_,slot)=>slot).sort((a,b)=>(row.best.get(b)?.loss??2)-(row.best.get(a)?.loss??2));
+    for(const slot of [...job.config.anchors.map(a=>a.slot),...ranked]){add(row.states.get(slot)?.elites[0]?.patch);add(row.best.get(slot)?.patch);if(seeds.length>=10)break}
+    // A neighboring pair often gives a useful first proposal for an in-between
+    // column. It is a seed, never an assumed solution for that column.
+    const neighbors=[...cells.values()].map(c=>({slot:c.id%32,patch:c.reference?.patch??c.patch})).filter(c=>c.patch);
+    const left=neighbors.filter(c=>c.slot<focus).sort((a,b)=>b.slot-a.slot)[0],right=neighbors.filter(c=>c.slot>focus).sort((a,b)=>a.slot-b.slot)[0];
+    if(left&&right)try{add(core.interpolate(left.patch,right.patch,(focus-left.slot)/(right.slot-left.slot)))}catch{}
+    const end=Date.now()+rowBudget;
+    let captures=0,duplicateAttempts=0;
+    while(!stopping&&(Date.now()<end||!row.best.get(focus))){
+      assertLease();
+      if(localPaused&&row.best.get(focus))break;
+      let p=seeds.shift();
+      if(!p){
+        const slot=row.count%5===0?ranked[Math.floor(row.count/5)%ranked.length]:focus;
+        const base=row.count%7===0?row.states.get(slot).elites[0].patch:row.best.get(slot)?.patch??row.states.get(slot).elites[0].patch;
+        p=native.nativeProposal(base,row.count++,job.config.allowDetune);
+      }
+      const key=patchKey(p);
+      if(row.checked.has(key)&&row.best.get(focus)){consume(key);if(++duplicateAttempts>128)break;continue}
+      duplicateAttempts=0;
+      // scoreMany reuses its cached capture/prepared pitch transforms between
+      // chunks. Yield after eight targets so even display-wave generation for
+      // a full row cannot starve tray pause/priority polling.
+      const results=[];
+      for(let start=0;start<32;start+=8){
+        results.push(...await reference.scoreMany(p,job.targets.slice(start,start+8),job.config.harmonics));
+        assertLease();await sleep(0);
+      }
+      if(!Array.isArray(results)||results.length!==32)throw Error('Native row scoring returned an incomplete row.');
+      assertLease();captures++;didWork=true;
+      // One model render also serves all targets; do not render the same patch
+      // 32 times merely because the comparison target changes.
+      const wave=core.render(p);
+      for(let slot=0;slot<32;slot++){
+        const candidate=results[slot],current=row.best.get(slot);
+        if(!current||candidate.loss<current.loss){row.best.set(slot,candidate);changedAt.set(rowStart+slot,Date.now());dirty.add(slot)}
+        addModelCandidate(row.states.get(slot),{patch:core.clone(p),...core.analyze(wave,job.targets[slot],job.config.harmonics)});
+        totalEvaluations++;dirty.add(slot);
+        if(slot%8===7)await sleep(0);
+      }
+      consume(key);row.checked.add(key);while(row.checked.size>384)row.checked.delete(row.checked.values().next().value);
+      await publish();await sleep(0);
+      if(captures>=24)break;
+    }
+    assertLease();
+    const updates=[...dirty].filter(slot=>completeReference(row.best.get(slot))).map(slot=>({id:rowStart+slot,state:row.states.get(slot),reference:row.best.get(slot),visited:slot===focus&&didWork,consumedSeeds:[...(consumed.get(slot)?.values()??[])].slice(0,64)}));
+    if(!updates.some(c=>c.id===job.id)&&completeReference(row.best.get(focus)))updates.push({id:job.id,state:row.states.get(focus),reference:row.best.get(focus),visited:didWork,consumedSeeds:[]} );
+    if(!updates.length){
+      if(localPaused||stopping){await request({action:'release',worker,id:job.id,generation:job.generation});return}
+      throw Error('No complete native cell result was available to save.');
+    }
+    phase='Saving table';
+    await request({action:'checkpoint_row',worker,id:job.id,generation:job.generation,cells:updates});
+    log(new Date().toISOString(),`Algorithm ${job.algorithm}, slice ${focus+1}: ${captures} captures, ${updates.length} cells saved.`);
+  }
+
+  log(new Date().toISOString(),'DexFraggler table scheduler started.');
+  try{
+    await tick();
+    while(!stopping)try{
+      await heartbeat();
+      if(localPaused){phase='Paused on this computer';await responsiveSleep(500);continue}
+      const worker=WORKER+' '+randomUUID();
+      const response=await request({action:'claim_row',worker,workerName:WORKER,status:compactStatus()});
+      const job=response.job;cloudRunning=response.running??Boolean(job);
+      if(!job){phase=cloudRunning?'Waiting for table':'Table paused';await responsiveSleep(1500);continue}
+      cloudRunning=true;active={job,worker,lastRenew:Date.now(),invalid:false};
+      await solveRow(job,worker);
+      active?.renewalController?.abort();
+      active=null;failures=0;phase=localPaused?'Paused on this computer':'Scanning table';await publish(true);
+      await responsiveSleep(30);
+    }catch(e){
+      const lease=active;lease?.renewalController?.abort();active=null;
+      if(lease&&e.status!==409)try{await request({action:localPaused||stopping?'release':'failed',worker:lease.worker,id:lease.job.id,generation:lease.job.generation,error:e.message})}catch{}
+      if(!reference.healthy){await reference.close();reference=createReference()}
+      if(e.status===409){phase='Refreshing table';failures=0;await responsiveSleep(150);continue}
+      phase='Reconnecting';errorLog(new Date().toISOString(),e.message);await publish(true);await responsiveSleep(Math.min(30000,1500*++failures));
+    }
+  }finally{
+    clearInterval(timer);process.off('SIGINT',stop);process.off('SIGTERM',stop);options.signal?.removeEventListener('abort',stop);
+    for(const controller of renewalControllers)controller.abort();
+    await reference.close();phase='Stopped';cloudRunning=false;await publish(true);
+    log('DexFraggler stopped. Saved anchors and cell results are retained.');
+  }
+}
+
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+  await runTableRunner({configPath:process.argv[2]});
+}

@@ -1,46 +1,35 @@
 # DexFraggler
 
-A private Sites workbench for a 32-algorithm × 32-slice DX7 patch table. One persistent Windows runner searches the entire map. The original FM1_WaveLab directory is preserved. All 1,024 patches from its live board (revision 1625, captured 2026-09-14 02:26:28 UTC) were retained as seeds with historical provenance. The three earlier waveform studies remain under `/studies` as an archive.
+A private Sites app for a 32-algorithm × 32-slice DX7 patch table, with a persistent Windows tray runner.
 
-## The map
+Set waveform anchors on any column. The path blends normalized complex Fourier coefficients, retaining harmonic phase. Rows keep their algorithm fixed while tuning, levels and feedback are optimized. Click a cell to inspect it; open Cell details for measurements, operators, routing and patch download.
 
-Algorithms are fixed rows; slices are fixed columns. Click a column or cell to set an anchor. Defaults: Triangle at 1, Square at 16, Saw at 32. Add sine or custom single-cycle JSON anchors anywhere. Between anchors, blend normalized complex Fourier coefficients and normalize the result; outside them, hold the nearest anchor. Default fundamentals share sine phase; custom cycles preserve supplied phase. Short input cycles are limited to their source Nyquist. Invalid or silent target paths are rejected before saving.
+## Search and precision
 
-Every row searches legal tuning, level and feedback values with its algorithm fixed. One scheduler visits each cell once per pass, anchors first, using same-row neighbors and compatible interpolation as seeds. Failed cells get a five-minute retry delay. Changing targets invalidates only affected scores, preserves patches, and cancels the active lease. Ranked and absolute map colors only use current scores. Historical scores never color the new map.
+The smooth proposal model uses an analytic six-level Jacobian, including nested modulation and sample-delayed feedback. Damped least squares and carrier fitting propose legal quantized changes. A native Dexed Mark I process measures candidates independently at A2/A3/A4, 48 kHz, 4,096 samples per note after 150 ms settling. Ranking minimizes worst relative squared RMS error over those notes.
 
-## The important distinction
+Native captures and Fourier projections are reused across all 32 targets in a row. Conservative interpolation-error bounds eliminate provably losing coarse phase positions; all potential winners and every refinement iteration retain the full sampled objective. Exact SysEx keys cache captures without merging distinct patches. Row leases, target generations and atomic database batches prevent stale or regressing checkpoints.
 
-The browser shows two independent champions: a smooth mathematical proposal, and a patch measured through the compiled Dexed Mark I reference engine. Model scores cannot establish FM1 hardware accuracy. Read `/method` for equations, scoring, bandwidth, tuning, feedback, and precision limits.
+The model remains approximate; measurements cover the stated pitches and duration. No global-optimality certificate or FM1 hardware comparison is claimed. See `/method`, `docs/native-scoring.md` and `docs/analytic-fitting.md`.
 
-The solver uses harmonic seeds, bounded damped least squares for levels, nonnegative carrier fitting, discrete tuning/topology/feedback refinement, and compatible-patch interpolation. No neural network training is required. There is no global-optimality or exhaustive-coverage claim.
+## Windows app
 
-## Run and maintain
+- `desktop/DexFraggler.Tray.exe --root "C:\path\to\Dexfraggler"`: start the tray app.
+- `powershell -File desktop/install-shortcuts.ps1 -ProjectRoot "C:\path\to\Dexfraggler"`: install Desktop and sign-in shortcuts.
+- Tray menu: open DexFraggler, pause/resume, processor priority, download table, exit.
+- `node runner/background.mjs`: run the same scheduler without the tray.
 
-- `npm run dev`: local workbench, with simulated ChatGPT sign-in on loopback.
-- `npm run build`: Sites-compatible Cloudflare Worker build.
-- `node --test tests/core.test.mjs tests/table.test.mjs`: mathematical, map, codec and native regression tests.
-- `node tests/table-api.mjs`: local table persistence, import, lease and stale-result tests while the development server is running.
-- `node tests/api-integration.mjs`: real local D1 API integration tests while the development server is running.
-- `node runner/background.mjs`: persistent search, configured by ignored `.runtime/runner-config.json`.
-- `powershell -File runner/install-startup.ps1`: resume after Windows sign-in.
-- `powershell -File runner/install-startup.ps1 -Remove`: disable automatic startup.
+The runner reads ignored `.runtime/runner-config.json` containing the Site URL, Sites bypass credential and dedicated worker secret. These credentials are excluded from Git and publication. The tray and runner exchange atomic control/status files under `.runtime/`. The PC must be on for computation; closing the browser is safe.
 
-Pause the table in the Site to stop its computation. This PC must be running and connected for search progress to reach the Site. Closing the browser is safe. The runner keeps a local recovery checkpoint and logs under `.runtime/`, retries failures, and uses unique claim tokens plus target generations to reject stale writes. The startup shortcut still calls `runner/background.mjs`, which now starts the table scheduler.
+The Site stores anchors and results automatically. Restarting reconstructs optimization from saved patches and measured champions; it does not need a trial-history archive. Table JSON downloads include anchors, targets and cell results. Imported patches are remeasured. Single-voice and complete row/column SysEx exports preserve legal DX7 codes.
 
-The runner configuration contains the private Site URL, a Sites bypass credential, and its dedicated server secret. It is intentionally excluded from Git and publication. Do not share it. Hosted runtime secrets are configured in Sites, never in `.openai/hosting.json`.
+## Development and verification
 
-## Native reference engine
+- `npm run dev` and `npm run build`: Sites development server and Worker build.
+- `node --test tests/*.test.mjs`: model, derivatives, scoring, cache, targets, scheduling and codecs.
+- `node tests/table-api.mjs`: authenticated local D1 integration, row transactions and stale-result rejection (development server required).
+- `powershell -File desktop/build.ps1`: rebuild the Windows tray executable.
 
-`native/bin/DexfragglerReference.exe` was compiled from the exact copied local WaveFinder/Dexed Mark I sources. The source manifest and upstream licenses are retained under `native/`. Rebuild with CMake and MSVC using `native/CMakeLists.txt`. Its persistent stdin protocol accepts 155 validated VCED bytes and returns three 4,096-sample held-note measurements at 48 kHz, after 150 ms settling. Native ranking minimizes worst relative squared RMS error across notes 45, 57 and 69. The phase fit is refined continuously; performance controls are neutral.
+D1 migrations under `drizzle/` define persisted tables. `native/` retains the engine sources, source manifest and upstream licenses; rebuild the native executable with its CMake/MSVC configuration.
 
-## State and portability
-
-D1 migrations under `drizzle/` own the schema. Site data are authoritative. JSON table backups retain the target configuration, model/native champion patches and historical provenance, without bloating the export with all captured audio and internal trial states. Import accepts all 1,024 cells in bounded batches; candidates are re-scored, and imported scores are untrusted. The original live-board snapshot is retained separately in the adjacent `Dexfraggler-audit` directory; its normalized seed file SHA256 is `21e9588b38ce93aaf7286c796f6ce139b951e82e9cec3554fb380779a6af88a7`.
-
-Export a single VCED patch, a complete algorithm row or slice column as a standard 32-voice VMEM bank (4,104 bytes), or the complete table JSON. Incomplete banks are rejected. Imported 32-algorithm banks populate the selected slice; single-algorithm banks populate its row in voice order. Exporting retained patches awaiting remeasurement is allowed and identified. A DX7 patch table is not an additional hardware wavetable playback mode.
-
-WebMCP exposes `get_wavetable`, `select_wavetable_cell`, `set_wavetable_anchor`, and `set_table_running` to supported ChatGPT browsers. All four were exercised in the local browser with valid and invalid inputs and state read-back. Sites hosting remains private. The earlier study page retains its inspection and export capabilities; its separate searches are archived.
-
-## Scope limits
-
-Search defaults to ratio oscillators. Fixed-frequency imported patches are rendered, with their oscillator mode retained in SysEx. Detuning is optional. Mathematical model analysis remains an approximation and native evaluation is limited to the stated pitches, duration, velocity, and bandwidth. The FM1 device has not been measured. An always-on cloud compute host is not provisioned.
+WebMCP exposes `get_wavetable`, `select_wavetable_cell`, `set_wavetable_anchor` and `set_table_running` on the map and cell-details pages. Hosting remains private.
