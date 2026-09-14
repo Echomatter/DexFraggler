@@ -72,6 +72,23 @@ test('startup respects a saved local pause and never requests table start',async
   assert.deepEqual(actions,['heartbeat']);
 });
 
+test('uploaded seeds render first and only fully measured seeds are acknowledged on pause',async()=>{
+ const temp=await fs.mkdtemp(path.join(os.tmpdir(),'dexfraggler-seeds-'));
+ await fs.writeFile(path.join(temp,'runner-control.json'),JSON.stringify({paused:false,priority:'Normal'}));
+ const abort=new AbortController(),seed=core.blank(),second=core.blank();seed.algorithm=second.algorithm=1;seed.feedback=7;second.feedback=6;
+ let renders=0,saved;
+ await runTableRunner({root:temp,config:{runtimeDir:temp,rowBudgetMs:500},core,native:{nativeProposal:q=>core.clone(q)},signal:abort.signal,log(){},errorLog(){},createReference:()=>({healthy:true,child:{pid:null},close(){},async scoreMany(patch,subset){
+  assert.deepEqual(patch,seed);
+  if(renders++===0){await fs.writeFile(path.join(temp,'runner-control.json'),JSON.stringify({paused:true,priority:'Normal'}));await new Promise(r=>setTimeout(r,320))}
+  return subset.map(()=>nativeResult(patch));
+ }}),async request(body){
+  if(body.action==='claim_row'){assert.equal(body.protocol,'named-scans-v1');return {job:{scanId:'seeded',id:0,algorithm:1,generation:5,config:DEFAULT_CONFIG,targets,targetKeys:keys,cells:[],seeds:[{key:'a'.repeat(64),patch:seed},{key:'b'.repeat(64),patch:second}]}}}
+  if(body.action==='checkpoint_row'){saved=body;abort.abort()}
+  return {ok:true};
+ }});
+ assert.deepEqual(saved.consumedSeeds,['a'.repeat(64)]);assert.equal(saved.cells.length,32);assert.equal(renders,8);
+});
+
 test('compact row claims reuse stored measurements without retransmitting preview arrays',async()=>{
  const temp=await fs.mkdtemp(path.join(os.tmpdir(),'dexfraggler-compact-test-'));
  await fs.writeFile(path.join(temp,'runner-control.json'),JSON.stringify({paused:false,priority:'Normal'}));

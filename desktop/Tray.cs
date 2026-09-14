@@ -339,6 +339,30 @@ namespace DexFragglerTray
             return client;
         }
         private Uri Endpoint(string query) { return new Uri(Site().AbsoluteUri.TrimEnd('/') + "/api/table" + query); }
+        public async Task<Dictionary<string, object>> Catalog()
+        {
+            using (HttpClient client = Client())
+            using (HttpResponseMessage response = await client.GetAsync(Endpoint("?scans=1")).ConfigureAwait(false))
+                return await ReadResponse(response).ConfigureAwait(false);
+        }
+        private static async Task<Dictionary<string, object>> ReadResponse(HttpResponseMessage response)
+        {
+            string text = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            Dictionary<string, object> result;
+            try { result = Data.Serializer().Deserialize<Dictionary<string, object>>(text); }
+            catch { throw new InvalidOperationException("The site could not be reached. Check your connection and try again."); }
+            if (!response.IsSuccessStatusCode) throw new InvalidOperationException(Data.Text(result, "error", "The scan could not be changed."));
+            return result;
+        }
+        public async Task<Dictionary<string, object>> Action(object action)
+        {
+            string text = Data.Serializer().Serialize(action);
+            if (Encoding.UTF8.GetByteCount(text) > 4000000) throw new InvalidOperationException("This table exceeds the 4 MB import limit.");
+            using (HttpClient client = Client())
+            using (StringContent body = new StringContent(text, Encoding.UTF8, "application/json"))
+            using (HttpResponseMessage response = await client.PostAsync(Endpoint(""), body).ConfigureAwait(false))
+                return await ReadResponse(response).ConfigureAwait(false);
+        }
         public async Task Running(bool running)
         {
             using (HttpClient client = Client())
@@ -379,7 +403,7 @@ namespace DexFragglerTray
         private readonly Dictionary<string, ToolStripMenuItem> priorityItems = new Dictionary<string, ToolStripMenuItem>();
         private Dictionary<string, object> status = new Dictionary<string, object>();
         private Dictionary<string, object> control = new Dictionary<string, object>();
-        private bool exiting, toggling, downloading;
+        private bool exiting, toggling, downloading, managingScans;
         private long lastLaunchAttempt;
         private string priorityApplied = "";
         public static readonly string[] Priorities = { "Idle", "BelowNormal", "Normal", "AboveNormal", "High" };
@@ -424,6 +448,9 @@ namespace DexFragglerTray
                 priority.DropDownItems.Add(item); priorityItems.Add(name, item);
             }
             download = new ToolStripMenuItem("Download table results…", null, async delegate { await Download(); }); menu.Items.Add(download);
+            menu.Items.Add(new ToolStripMenuItem("New scan…", null, async delegate { await ManageScan("new_scan"); }));
+            menu.Items.Add(new ToolStripMenuItem("Switch scan…", null, async delegate { await ManageScan("switch_scan"); }));
+            menu.Items.Add(new ToolStripMenuItem("Import table as seeds…", null, async delegate { await ManageScan("import_seeds"); }));
             menu.Items.Add(new ToolStripSeparator()); menu.Items.Add(new ToolStripMenuItem("Exit tray and pause locally", null, delegate { ExitPaused(); }));
             tray = new NotifyIcon { Icon = icon, Text = "DexFraggler", ContextMenuStrip = menu, Visible = !selfTest };
             tray.DoubleClick += delegate { OpenTable(); };
@@ -610,8 +637,99 @@ namespace DexFragglerTray
             {
                 await SaveResults(output); result["path"] = Path.GetFullPath(output); result["bytes"] = new FileInfo(output).Length;
             }
-            else throw new InvalidOperationException("Use pause, resume, priority or download-to-path.");
+            else if (command == "list-scans") return await remote.Catalog();
+            else if (command == "new-scan" || command == "switch-scan" || command == "import-seeds")
+            {
+                Dictionary<string, object> catalog = await remote.Catalog();
+                Dictionary<string, object> action = new Dictionary<string, object> { { "generation", catalog["generation"] } };
+                if (command == "new-scan") { action["action"] = "new_scan"; action["name"] = value; }
+                else if (command == "switch-scan") { action["action"] = "switch_scan"; action["scanId"] = value; }
+                else
+                {
+                    action["action"] = "import_seeds"; action["table"] = ReadSeedTable(output);
+                    if (value != null && value.StartsWith("new:")) { action["destination"] = "new"; action["name"] = value.Substring(4); }
+                    else action["scanId"] = value;
+                }
+                return await ActivateScan(action);
+            }
+            else throw new InvalidOperationException("Unknown tray command.");
             result["ok"] = true; return result;
+        }
+        private static object ReadSeedTable(string path)
+        {
+            if (!Path.IsPathRooted(path) || new FileInfo(path).Length > 4000000) throw new InvalidOperationException("Choose a table JSON file smaller than 4 MB.");
+            object table;
+            try { table = Data.Serializer().DeserializeObject(File.ReadAllText(path)); TableExport.Validate(table); }
+            catch { throw new InvalidOperationException("Choose a version 4 DexFraggler table JSON file."); }
+            return table;
+        }
+        private async Task<Dictionary<string, object>> ActivateScan(Dictionary<string, object> action)
+        {
+            Dictionary<string, object> result = await remote.Action(action);
+            WriteControl(false, DesiredPriority());
+            if (!selfTest) { lastLaunchAttempt = 0; EnsureRunner(); }
+            RefreshState(); return result;
+        }
+        private sealed class ScanChoice
+        {
+            public string Id, Name; public int Cells; public bool Active;
+            public override string ToString() { return Id == null ? "New scan" : Name + " · " + Cells + " cells" + (Active ? " · current" : ""); }
+        }
+        private async Task ManageScan(string kind)
+        {
+            if (managingScans) return;
+            managingScans = true;
+            try
+            {
+                object imported = null; string defaultName = "Scan " + DateTime.Now.ToString("yyyy-MM-dd HH:mm");
+                if (kind == "import_seeds")
+                {
+                    using (OpenFileDialog file = new OpenFileDialog { Title = "Import DexFraggler table as seeds", Filter = "DexFraggler table (*.json)|*.json", CheckFileExists = true })
+                    {
+                        if (file.ShowDialog() != DialogResult.OK) return;
+                        imported = ReadSeedTable(file.FileName); defaultName = Path.GetFileNameWithoutExtension(file.FileName).Replace(".dxtable", "");
+                    }
+                }
+                Dictionary<string, object> catalog = await remote.Catalog();
+                using (Form dialog = new Form { Text = kind == "new_scan" ? "New scan" : kind == "switch_scan" ? "Switch scan" : "Import table as seeds", ClientSize = new Size(500, 276), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterScreen, Font = SystemFonts.MessageBoxFont, ShowInTaskbar = true })
+                {
+                    Label info = new Label { Left = 20, Top = 18, Width = 460, Height = 64, Text = kind == "new_scan" ? "Start an empty table with the current anchors. Your existing scan stays saved, ready to resume." : kind == "switch_scan" ? "Resume a saved scan with its own anchors and cell results." : "Patches will be measured against the destination anchors. Existing results stay saved; only better measurements replace them." };
+                    ComboBox choice = new ComboBox { Left = 20, Top = 104, Width = 460, DropDownStyle = ComboBoxStyle.DropDownList, Visible = kind != "new_scan" };
+                    Label destination = new Label { Left = 20, Top = 84, Width = 460, Text = "Destination", Visible = choice.Visible };
+                    if (kind == "import_seeds") choice.Items.Add(new ScanChoice { Name = "New scan" });
+                    foreach (object raw in (System.Collections.IEnumerable)catalog["scans"])
+                    {
+                        Dictionary<string, object> scan = (Dictionary<string, object>)raw;
+                        ScanChoice item = new ScanChoice { Id = Data.Text(scan, "id"), Name = Data.Text(scan, "name"), Cells = (int)Data.Number(scan, "cells"), Active = Data.Text(scan, "id") == Data.Text(catalog, "activeScanId") };
+                        choice.Items.Add(item); if (item.Active) choice.SelectedItem = item;
+                    }
+                    Label nameLabel = new Label { Left = 20, Top = kind == "new_scan" ? 92 : 146, Width = 460, Text = "Scan name", Visible = kind != "switch_scan" };
+                    TextBox name = new TextBox { Left = 20, Top = kind == "new_scan" ? 114 : 168, Width = 460, MaxLength = 80, Text = defaultName.Substring(0, Math.Min(80, defaultName.Length)), Visible = nameLabel.Visible };
+                    Button accept = new Button { Left = 326, Top = 226, Width = 154, Height = 30, Text = kind == "new_scan" ? "Create and scan" : kind == "switch_scan" ? "Resume scan" : "Import and scan" };
+                    Button cancel = new Button { Left = 222, Top = 226, Width = 96, Height = 30, Text = "Cancel", DialogResult = DialogResult.Cancel };
+                    Action refresh = delegate {
+                        ScanChoice selected = choice.SelectedItem as ScanChoice;
+                        name.Enabled = kind == "new_scan" || (kind == "import_seeds" && selected != null && selected.Id == null);
+                        accept.Enabled = (kind == "new_scan" || selected != null) && (!name.Enabled || !String.IsNullOrWhiteSpace(name.Text));
+                        if (kind == "import_seeds") info.Text = selected != null && selected.Id == null ? "Create a scan using the uploaded table's anchors. Its patches will be remeasured before any results appear." : "Patches will be measured against the destination anchors. Existing results stay saved; only better measurements replace them.";
+                    };
+                    choice.SelectedIndexChanged += delegate { refresh(); }; name.TextChanged += delegate { refresh(); }; refresh();
+                    accept.Click += async delegate {
+                        ScanChoice selected = choice.SelectedItem as ScanChoice;
+                        Dictionary<string, object> action = new Dictionary<string, object> { { "action", kind }, { "generation", catalog["generation"] } };
+                        if (kind == "new_scan" || (kind == "import_seeds" && selected.Id == null)) { action["name"] = name.Text.Trim(); action["destination"] = "new"; }
+                        else action["scanId"] = selected.Id;
+                        if (imported != null) action["table"] = imported;
+                        accept.Enabled = false; cancel.Enabled = false; choice.Enabled = false; name.Enabled = false; dialog.ControlBox = false;
+                        try { await ActivateScan(action); dialog.DialogResult = DialogResult.OK; dialog.Close(); Show("Scan ready. Search is running."); OpenTable(); }
+                        catch (Exception e) { MessageBox.Show(dialog, e is InvalidOperationException ? e.Message : "The scan could not be changed. Check your connection, then reopen this dialog.", "DexFraggler", MessageBoxButtons.OK, MessageBoxIcon.Information); dialog.DialogResult = DialogResult.Cancel; dialog.Close(); }
+                    };
+                    dialog.Controls.AddRange(new Control[] { info, destination, choice, nameLabel, name, accept, cancel });
+                    dialog.AcceptButton = accept; dialog.CancelButton = cancel; dialog.ShowDialog();
+                }
+            }
+            catch (Exception e) { Show(e is InvalidOperationException ? e.Message : "Scan controls are unavailable. Check your connection and try again.", true); }
+            finally { managingScans = false; }
         }
         private void ExitPaused()
         {
@@ -651,7 +769,7 @@ namespace DexFragglerTray
             if (root == null || !Directory.Exists(root)) { MessageBox.Show("Start DexFraggler with --root followed by its project folder.", "DexFraggler", MessageBoxButtons.OK, MessageBoxIcon.Information); return 2; }
             if (args.Contains("--status")) return Status(root, Argument(args, "--report"));
             string command = Argument(args, "--command");
-            if (command != null) return Command(root, command, Argument(args, "--value"), Argument(args, "--output"), Argument(args, "--report"));
+            if (command != null) return Command(root, command, Argument(args, "--value"), Argument(args, "--input") ?? Argument(args, "--output"), Argument(args, "--report"));
             if (args.Contains("--open"))
             {
                 try { Process.Start(new ProcessStartInfo(new Remote(root).Site().AbsoluteUri) { UseShellExecute = true }); }
@@ -717,7 +835,7 @@ namespace DexFragglerTray
                 Directory.CreateDirectory(testRoot);
                 using (TrayContext tray = new TrayContext(testRoot, true))
                 {
-                    if (tray.MenuCount != 9 || tray.PriorityCount != 5) throw new Exception("Menu construction failed.");
+                    if (tray.MenuCount != 12 || tray.PriorityCount != 5) throw new Exception("Menu construction failed.");
                     tray.WriteControl(true, "BelowNormal");
                     string path = Path.Combine(testRoot, ".runtime", "runner-control.json");
                     if (!Data.Bool(Data.Read(path), "paused")) throw new Exception("Pause persistence failed.");

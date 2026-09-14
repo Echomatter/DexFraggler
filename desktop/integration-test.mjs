@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 import crypto from 'node:crypto';
 
 const work=path.dirname(fileURLToPath(import.meta.url));
+const executable=path.resolve(process.env.DEXFRAGGLER_TEST_TRAY??path.join(work,'DexFraggler.Tray.exe'));
 const root=path.join(work,'integration-probe-'+crypto.randomUUID());
 await fs.mkdir(path.join(root,'runner'),{recursive:true});
 await fs.mkdir(path.join(root,'.runtime'),{recursive:true});
@@ -14,8 +15,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+import crypto from 'node:crypto';
 let running=true;
-async function status(){await fs.writeFile(path.join(root,'.runtime/runner-status.json'),JSON.stringify({pid:process.pid,root,processStartTime:Date.now()-process.uptime()*1000,running,localPaused:false,priority:'Normal',phase:'Isolated menu integration stub',updatedAt:Date.now(),evaluations:42}));}
+async function atomicStatus(text){const target=path.join(root,'.runtime/runner-status.json'),temporary=target+'.'+crypto.randomUUID()+'.tmp';await fs.writeFile(temporary,text);for(let i=0;;i++)try{await fs.rename(temporary,target);return}catch(e){if(i>=20)throw e;await new Promise(r=>setTimeout(r,20))}}
+async function status(){await atomicStatus(JSON.stringify({pid:process.pid,root,processStartTime:Date.now()-process.uptime()*1000,running,localPaused:false,priority:'Normal',phase:'Isolated menu integration stub',updatedAt:Date.now(),evaluations:42}));}
 await status();
 setInterval(()=>status(),500).unref();
 const server=http.createServer(async(req,res)=>{
@@ -46,7 +49,7 @@ async function read(name){return JSON.parse(await fs.readFile(path.join(root,nam
 let sequence=0;
 async function cli(args,expectedExit=0){
  const report=path.join(root,'command-'+(++sequence)+'.json');
- const child=spawn(path.join(work,'DexFraggler.Tray.exe'),['--root',root,...args,'--report',report],{cwd:work,windowsHide:true,stdio:'ignore'});
+ const child=spawn(executable,['--root',root,...args,'--report',report],{cwd:work,windowsHide:true,stdio:'ignore'});
  const code=await new Promise((resolve,reject)=>{const t=setTimeout(()=>{child.kill();reject(Error('CLI command timed out.'));},35000);child.once('exit',c=>{clearTimeout(t);resolve(c)});child.once('error',e=>{clearTimeout(t);reject(e)});});
  if(code!==expectedExit)throw Error('Unexpected command exit '+code+' for '+args.join(' '));
  return JSON.parse(await fs.readFile(report,'utf8'));
@@ -55,10 +58,10 @@ try{
  const ready=await waitFor(()=>read('ready.json'));
  await fs.writeFile(path.join(root,'.runtime/runner-config.json'),JSON.stringify({url:'http://127.0.0.1:'+ready.port,bypass:'isolated-test-bypass',secret:'isolated-test-secret',cookie:'isolated=test'}));
  await fs.writeFile(path.join(root,'.runtime/runner-control.json'),JSON.stringify({paused:false,priority:'Normal',updatedAt:Date.now()}));
- tray=spawn(path.join(work,'DexFraggler.Tray.exe'),['--root',root],{cwd:work,windowsHide:true,stdio:'ignore'});
+ tray=spawn(executable,['--root',root],{cwd:work,windowsHide:true,stdio:'ignore'});
  await waitFor(async()=>{const s=await read('.runtime/tray-status.json');return s.notifyIconVisible&&s.pid===tray.pid;});
  let result=await cli(['--status']);
- checks.liveNotifyIconVerified=result.alive&&result.processVerified&&result.uiHeartbeatFresh&&result.tray.menuItems===9;
+ checks.liveNotifyIconVerified=result.alive&&result.processVerified&&result.uiHeartbeatFresh&&result.tray.menuItems===12;
  result=await cli(['--command','pause']);
  checks.pauseMenuLogic=result.localSaved&&result.paused&&result.siteSynchronized&&(await read('.runtime/runner-control.json')).paused;
  await waitFor(async()=>{const s=await read('.runtime/tray-status.json');return s.localPaused;});

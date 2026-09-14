@@ -10,7 +10,7 @@ export type Summary={id:number;current:boolean;visits:number;evaluations:number;
 export type Measurement={note:number;score:number;error:number;wave:number[];target:number[];idealTarget:number[];phase:number;bands:number};
 export type Result={patch:Patch;score:number;loss:number;error?:number;source?:string};
 export type Cell={id:number;patch:Patch;target_key:string;state:{elites:Result[];evaluations:number;history:{at:number;error:number;score:number}[]}|null;reference:Result&{notes:Measurement[];testedAt:number;engine:string}|null;current?:boolean};
-export type Data={config:Config;revision:number;generation:number;running:boolean;activeId:number|null;activeIds?:number[];cells:Summary[];workers:{id:string;last_seen:number;engine:string;status?:{cellsPerMinute?:number;priority?:string;phase?:string;localPaused?:boolean}}[]};
+export type Data={scan:{id:string;name:string};pendingSeeds:number;config:Config;revision:number;generation:number;running:boolean;activeId:number|null;activeIds?:number[];cells:Summary[];workers:{id:string;last_seen:number;engine:string;status?:{cellsPerMinute?:number;priority?:string;phase?:string;localPaused?:boolean}}[]};
 export const pad=(n:number)=>String(n).padStart(2,'0');
 export function download(data:BlobPart,name:string,type='application/json'){const url=URL.createObjectURL(new Blob([data],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 export function useTable(){

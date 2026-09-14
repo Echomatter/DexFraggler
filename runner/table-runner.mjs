@@ -1,4 +1,5 @@
 import {TARGET_VERSION,METRIC_VERSION,targetKey} from '../public/targets.mjs';
+import {RUNNER_PROTOCOL} from '../public/table-import.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -125,7 +126,7 @@ export async function runTableRunner(options={}){
   const assertLease=()=>{if(active?.invalid)throw Object.assign(Error('Search batch superseded.'),{status:409})};
 
   async function solveRow(job,worker){
-    const rowStart=(job.algorithm-1)*32,focus=job.id%32,signature=JSON.stringify([job.generation,job.targetKeys]);
+    const rowStart=(job.algorithm-1)*32,focus=job.id%32,signature=JSON.stringify([job.scanId,job.generation,job.targetKeys]);
     let row=rows.get(job.algorithm);
     if(row?.signature!==signature){row={signature,generation:job.generation,states:new Map(),best:new Map(),checked:new Set(),count:0};rows.set(job.algorithm,row)}
     const cells=new Map((job.cells??[]).map(c=>[Number(c.id),c])),dirty=new Set();
@@ -145,7 +146,9 @@ export async function runTableRunner(options={}){
       assertLease();const before=state.evaluations;state=core.runBatch(state,75);totalEvaluations+=state.evaluations-before;row.states.set(focus,state);dirty.add(focus);didWork=true;await sleep(0);
     }
     const seeds=[];
+    const imported=new Map((job.seeds??[]).map(seed=>[patchKey(seed.patch),seed.key])),consumed=new Set();
     const add=p=>{if(p?.algorithm===job.algorithm&&!seeds.some(x=>patchKey(x)===patchKey(p)))seeds.push(p)};
+    for(const seed of job.seeds??[])add(seed.patch);
     add(state.elites[0]?.patch);add(row.best.get(focus)?.patch);add(cells.get(job.id)?.reference?.patch);add(cells.get(job.id)?.patch);
     const ranked=Array.from({length:32},(_,slot)=>slot).sort((a,b)=>(row.best.get(b)?.loss??2)-(row.best.get(a)?.loss??2));
     for(const slot of [...job.config.anchors.map(a=>a.slot),...ranked]){add(row.states.get(slot)?.elites[0]?.patch);add(row.best.get(slot)?.patch);if(seeds.length>=10)break}
@@ -166,7 +169,7 @@ export async function runTableRunner(options={}){
         p=native.nativeProposal(base,row.count++,job.config.allowDetune);
       }
       const key=patchKey(p);
-      if(row.checked.has(key)&&row.best.get(focus)){if(++duplicateAttempts>128)break;continue}
+      if(row.checked.has(key)&&!imported.has(key)&&row.best.get(focus)){if(++duplicateAttempts>128)break;continue}
       duplicateAttempts=0;
       // scoreMany reuses its cached capture/prepared pitch transforms between
       // chunks. Yield after eight targets so even display-wave generation for
@@ -197,6 +200,7 @@ export async function runTableRunner(options={}){
         if(slot%8===7)await sleep(0);
       }
       row.checked.add(key);while(row.checked.size>384)row.checked.delete(row.checked.values().next().value);
+      if(imported.has(key))consumed.add(imported.get(key));
       await publish();await sleep(0);
       if(captures>=24)break;
     }
@@ -214,7 +218,7 @@ export async function runTableRunner(options={}){
       throw Error('No complete native cell result was available to save.');
     }
     phase='Saving table';
-    await request({action:'checkpoint_row',worker,id:job.id,generation:job.generation,cells:updates});
+    await request({action:'checkpoint_row',worker,id:job.id,generation:job.generation,cells:updates,consumedSeeds:[...consumed]});
     log(new Date().toISOString(),`Algorithm ${job.algorithm}, slice ${focus+1}: ${captures} captures, ${updates.length} cells saved.`);
   }
 
@@ -225,7 +229,7 @@ export async function runTableRunner(options={}){
       await heartbeat();
       if(localPaused){phase='Paused on this computer';await responsiveSleep(500);continue}
       const worker=WORKER+' '+randomUUID();
-      const response=await request({action:'claim_row',worker,model:core.MODEL,targetVersion:TARGET_VERSION,metricVersion:METRIC_VERSION,status:compactStatus()});
+      const response=await request({action:'claim_row',worker,protocol:RUNNER_PROTOCOL,model:core.MODEL,targetVersion:TARGET_VERSION,metricVersion:METRIC_VERSION,status:compactStatus()});
       const job=response.job;cloudRunning=response.running??Boolean(job);
       if(!job){phase=cloudRunning?'Waiting for table':'Table paused';await responsiveSleep(1500);continue}
       cloudRunning=true;active={job,worker,lastRenew:Date.now(),invalid:false};

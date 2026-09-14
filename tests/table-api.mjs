@@ -1,3 +1,4 @@
+import {RUNNER_PROTOCOL} from '../public/table-import.mjs';
 import assert from 'node:assert/strict';
 import {MODEL,initialState,runBatch,clone,blank} from '../public/core.mjs';
 import {TARGET_VERSION,columnTargets,targetKey,validateTarget} from '../public/targets.mjs';
@@ -20,7 +21,7 @@ async function post(body){
  return {status:response.status,data:await response.json()};
 }
 async function successful(body){const result=await post(body);assert.equal(result.status,200,JSON.stringify(result));return result.data;}
-const claim=(worker,extra={})=>post({action:'claim_row',worker,model:MODEL,targetVersion:TARGET_VERSION,metricVersion:METRIC_VERSION,...extra});
+const claim=(worker,extra={})=>post({action:'claim_row',worker,protocol:RUNNER_PROTOCOL,model:MODEL,targetVersion:TARGET_VERSION,metricVersion:METRIC_VERSION,...extra});
 async function rejectsAtomically(body,status=400){
  const before=await get(),result=await post(body);
  assert.equal(result.status,status,JSON.stringify(result));

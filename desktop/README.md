@@ -4,7 +4,9 @@ A real .NET Framework WinForms tray executable with a geometry-drawn icon. Requi
 
 Start `DexFraggler.Tray.exe --root "C:\path\to\Dexfraggler"`. No user path or credential is compiled into it. One tray runs per project and Windows session. Add `--open` to open the configured Site in the default browser, including when the tray is already running. Opening the table preserves the existing pause setting. Startup should omit `--open`.
 
-The menu opens the waveform table, pauses/resumes computing, selects Idle/BelowNormal/Normal/AboveNormal/High process priority, downloads table results, or exits after saving a local pause. Double-click opens the table. Exit never terminates a worker or native process.
+The menu opens the waveform table, pauses/resumes computing, selects Idle/BelowNormal/Normal/AboveNormal/High process priority, downloads table results, creates or switches named scans, imports table patches as seeds, or exits after saving a local pause. Double-click opens the table. Exit never terminates a worker or native process.
+
+New scan creates an empty dataset with the active anchors, preserving every established scan. Switch scan resumes a saved dataset. Import table as seeds accepts a current version 4 table; choose New scan to use its anchors, or an existing scan to keep that destination's anchors and champions. Every imported patch is remeasured. Successful scan actions start the selected scan and resume this computer. The web page shows the active scan name and pending seed count.
 
 ## Installation
 
@@ -28,6 +30,8 @@ Before changing priority, the tray verifies that node.exe is running this projec
 
 If no owned runner exists, the tray launches Node hidden with an absolute script path and the project as working directory. Direct inherited file handles append stdout to `.runtime/runner.log` and stderr to `.runtime/runner-error.log`; logging survives tray exit. The tray records `.runtime/tray-runner-launch.json` with pid/start/root and writes `runner.pid`. It retries missing/crashed workers at most every 30 seconds. Relative-script runners without a matching start-time status cannot be safely adopted.
 
+Scan controls use GET `/api/table?scans=1` and generation-guarded POST actions `new_scan`, `switch_scan`, and `import_seeds`. Named scans share the database but keep separate cells and pending seed queues. Scan changes supersede unfinished work. The current runner advertises `named-scans-v1`; seed acknowledgments commit atomically with row results.
+
 ## Diagnostics and verification
 
 The following commands are Windows executables and do not open consoles. Use an absolute `--report` path to receive JSON.
@@ -38,7 +42,13 @@ DexFraggler.Tray.exe --root "C:\project" --command pause --report "C:\output\pau
 DexFraggler.Tray.exe --root "C:\project" --command resume --report "C:\output\resume.json"
 DexFraggler.Tray.exe --root "C:\project" --command priority --value BelowNormal --report "C:\output\priority.json"
 DexFraggler.Tray.exe --root "C:\project" --command download-to-path --output "C:\output\table.json" --report "C:\output\download.json"
+DexFraggler.Tray.exe --root "C:\project" --command list-scans --report "C:\output\scans.json"
+DexFraggler.Tray.exe --root "C:\project" --command new-scan --value "New experiment" --report "C:\output\new.json"
+DexFraggler.Tray.exe --root "C:\project" --command switch-scan --value SCAN_ID --report "C:\output\switch.json"
+DexFraggler.Tray.exe --root "C:\project" --command import-seeds --value "new:Seeded experiment" --input "C:\output\table.json" --report "C:\output\import.json"
 ```
+
+For an established import destination, pass its scan ID as `--value`.
 
 `--status` is read-only. It checks `.runtime/tray-status.json`, live executable identity, process start time, a fresh UI heartbeat, and the initialized/visible NotifyIcon. Exit code 0 means an active verified tray; 3 means absent or stale. The heartbeat establishes actual NotifyIcon initialization but does not assert whether Windows places the icon in the visible taskbar area or overflow area.
 

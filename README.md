@@ -18,18 +18,19 @@ Table progress averages all 1,024 native match scores with unmeasured cells cont
 
 - `desktop/DexFraggler.Tray.exe --root "C:\path\to\Dexfraggler"`: start the tray app.
 - `powershell -File desktop/install-shortcuts.ps1 -ProjectRoot "C:\path\to\Dexfraggler"`: install Desktop and sign-in shortcuts.
-- Tray menu: open DexFraggler, pause/resume, processor priority, download table, exit.
+- Tray menu: open DexFraggler, pause/resume, processor priority, download table, new scan, switch scan, import table as seeds, exit.
 - `node runner/background.mjs`: run the same scheduler without the tray.
 
 The runner reads ignored `.runtime/runner-config.json` containing the Site URL, Sites bypass credential and dedicated worker secret. These credentials are excluded from Git and publication. The tray and runner exchange atomic control/status files under `.runtime/`. The PC must be on for computation; closing the browser is safe.
 
-The Site stores anchors and results automatically. Restarting reconstructs optimization from saved patches and measured champions; it does not need a trial-history archive. Table JSON downloads include anchors, targets and cell results. Single-voice and complete row/column SysEx exports preserve legal DX7 codes.
+The Site stores independent named scans automatically. New scan keeps the current anchors and starts with no results; Switch scan resumes any saved dataset. Import table as seeds accepts current version 4 JSON: a new destination uses the uploaded anchors, while an existing destination keeps its anchors and champions. Imported patches are independently remeasured across their algorithm rows, without restoring uploaded scores or optimizer history. Pending seeds survive restarts. Restarting reconstructs optimization from saved patches and measured champions; it does not need a trial-history archive. Table JSON downloads include anchors, targets and cell results. Single-voice and complete row/column SysEx exports preserve legal DX7 codes.
 
 ## Development and verification
 
 - `npm run dev` and `npm run build`: Sites development server and Worker build.
 - `node --test tests/*.test.mjs`: model, derivatives, scoring, cache, targets, scheduling and codecs.
 - `node tests/table-api.mjs`: authenticated local D1 integration, row transactions and stale-result rejection (development server required).
+- `node tests/scans-api.mjs`: local native-renderer and desktop command integration for scan creation, switching and seed imports.
 - `powershell -File desktop/build.ps1`: rebuild the Windows tray executable.
 
 D1 migrations under `drizzle/` define persisted tables. `native/` retains the engine sources, source manifest and upstream licenses; rebuild the native executable with its CMake/MSVC configuration.
