@@ -1,0 +1,21 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {blank,analyze,targetWave,render,sysex,fromSysex,validatePatch,runBatch,initialState,interpolate,fft,algorithms} from '../public/core.mjs';
+import {Reference} from '../runner/reference.mjs';
+test('phase alignment preserves waveform shape with one global shift',()=>{const t=targetWave('saw'),shift=53,y=Float64Array.from(t,(_,i)=>3*t[(i+shift)%t.length]);const m=analyze(y,'saw');assert.ok(m.score>1-1e-12);assert.ok(Math.abs(m.scale-1/3)<1e-12)});
+test('phase-distorted equal-magnitude waves do not get a perfect score',()=>{const t=targetWave('saw'),re=new Float64Array(t),im=new Float64Array(t.length);fft(re,im);for(let k=8;k<512;k+=8){re[k]*=-1;im[k]*=-1;re[1024-k]*=-1;im[1024-k]*=-1}fft(re,im,true);assert.ok(analyze(re,'saw').score<.99)});
+test('zero output cannot be a matching waveform',()=>{const p=blank();p.operators.forEach(o=>o.level=0);assert.equal(analyze(render(p),'triangle').score,0)});
+test('all 32 algorithms render finite delayed-feedback output',()=>{for(let a=1;a<=32;a++){const p=blank();p.algorithm=a;p.feedback=7;p.operators.forEach(o=>o.level=80);assert.ok(Array.from(render(p)).every(Number.isFinite))}assert.equal(algorithms.length,32)});
+test('DX7 single-voice checksum and full parameter round trip',()=>{const p=blank();p.algorithm=4;p.feedback=7;p.operators.forEach((o,i)=>{o.coarse=i*6;o.fine=i*17;o.detune=i*2;o.level=i*18});const b=sysex(p);assert.equal(b.length,163);assert.equal((Array.from(b.slice(6,162)).reduce((s,x)=>s+x,0))&127,0);assert.deepEqual(fromSysex(b),p);b[36]^=1;assert.throws(()=>fromSysex(b),/checksum/)});
+test('imports reject illegal and duplicate operators',()=>{const p=blank();p.operators[1].op=1;assert.throws(()=>validatePatch(p));p.operators[1].op=2;p.operators[0].fine=100;assert.throws(()=>validatePatch(p))});
+test('resumed batches retain or improve the champion',()=>{const s=initialState('square'),old=JSON.stringify(s),next=runBatch(s,100);assert.equal(JSON.stringify(s),old);assert.ok(next.evaluations>s.evaluations);assert.ok(next.elites[0].loss<=s.elites[0].loss);const resumed=runBatch(JSON.parse(JSON.stringify(next)),100);assert.ok(resumed.elites[0].loss<=next.elites[0].loss)});
+test('interpolation blends effective ratios, not raw coarse codes',()=>{const a=blank(),b=blank();a.operators[0].coarse=1;a.operators[0].fine=99;b.operators[0].coarse=2;b.operators[0].fine=0;const c=interpolate(a,b,.5);assert.ok(c.operators[0].coarse*(1+c.operators[0].fine/100)>1.98);b.algorithm=31;assert.throws(()=>interpolate(a,b,.5),/same algorithm/)});
+test('native engine produces measured results at all three pitches',async()=>{const r=new Reference();try{const s=await r.score(blank(),'triangle');assert.deepEqual(s.notes.map(x=>x.note),[45,57,69]);assert.ok(s.notes.every(x=>x.score>.99&&x.score<1));assert.ok(s.notes.every(x=>x.wave.length===512))}finally{r.close()}});
+
+import {display,frequency} from '../public/core.mjs';
+import {nativeProposal} from '../runner/reference.mjs';
+import {measuredScore} from '../runner/measurement.mjs';
+test('silent diagnostics and seven-bit SysEx validation remain finite and strict',()=>{const p=blank();p.operators.forEach(o=>o.level=0);assert.ok(display(p,'saw').harmonics.every(Number.isFinite));const b=sysex(blank());b[161]+=128;assert.throws(()=>fromSysex(b));const c=sysex(blank());c[2]=16;assert.throws(()=>fromSysex(c))});
+test('interpolation preserves detuned endpoints and legal fixed-frequency boundaries',()=>{const p=blank();p.operators[0].detune=14;assert.deepEqual(interpolate(p,p,0),p);const a=blank(),b=blank();a.operators[0].mode=b.operators[0].mode=1;a.operators[0].coarse=1;a.operators[0].fine=99;b.operators[0].coarse=2;b.operators[0].fine=0;assert.doesNotThrow(()=>validatePatch(interpolate(a,b,.9)));const o={...a.operators[0],detune:14};assert.ok(frequency(o)>frequency({...o,detune:7}))});
+test('native fine-tuning proposals move in both directions',()=>{const p=blank();p.operators.forEach(o=>o.fine=50);assert.equal(nativeProposal(p,8).operators[0].fine,49);assert.equal(nativeProposal(p,20).operators[1].fine,51)});
+test('native phase refinement has no coarse-grid error floor',()=>{const y=targetWave('saw',32,4096,220,.123456);const m=measuredScore(Array.from(y),'saw',57,32);assert.ok(m.error<.00001, String(m.error))});

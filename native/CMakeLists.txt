@@ -1,0 +1,21 @@
+cmake_minimum_required(VERSION 3.22)
+project(DexfragglerNativeReference VERSION 1.0.0 LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+file(GLOB DX7_MSFA CONFIGURE_DEPENDS vendor/third_party/dx7/msfa/*.cc)
+add_library(dx7_reference STATIC
+    vendor/Source/Patch.cpp vendor/Source/Dx7Engine.cpp
+    vendor/third_party/dx7/EngineMkI.cpp
+    vendor/third_party/dx7/msfa/porta.cpp ${DX7_MSFA})
+target_include_directories(dx7_reference PUBLIC vendor/Source PRIVATE vendor/third_party/dx7)
+target_compile_definitions(dx7_reference PUBLIC _USE_MATH_DEFINES NOMINMAX)
+if(MSVC)
+    target_compile_options(dx7_reference PRIVATE /O2 /W3 /wd4244 /wd4267 /wd4996)
+endif()
+add_executable(DexfragglerReference NativeRenderer.cpp)
+target_link_libraries(DexfragglerReference PRIVATE dx7_reference)
+add_executable(WaveFinderEngineTests tests/WaveFinderEngineTests.cpp)
+target_link_libraries(WaveFinderEngineTests PRIVATE dx7_reference)
+enable_testing()
+add_test(NAME copied_engine_suite COMMAND WaveFinderEngineTests)

@@ -1,0 +1,151 @@
+{
+  "sourceRoot": "C:\\Users\\Charl\\Documents\\ChatGPT\\FM1_WaveFinder",
+  "sourceCommit": "2e182b3db85c09083ab13c8b9b00565ce7d9ff85 (upstream Dexed base, with local WaveFinder changes)",
+  "copiedAtUtc": "2026-09-14T01:23:16.4566093Z",
+  "files": [
+    {
+      "path": "vendor/Source/Dx7Engine.cpp",
+      "sha256": "342cc3318b5e9b98587b716d6ed1597cb5f0fd0fc0a5dab07dc85315a34e1bae"
+    },
+    {
+      "path": "vendor/Source/Dx7Engine.h",
+      "sha256": "21077ebe299b1799517aea117debb47fd2f1c1fb33edd042d04825b74eeaeb50"
+    },
+    {
+      "path": "vendor/Source/Patch.cpp",
+      "sha256": "dc69242e547c5980a6eb6538dbd0d87ae96cfc470141f77dd4940a736bb0a25a"
+    },
+    {
+      "path": "vendor/Source/Patch.h",
+      "sha256": "babff9ef68da190af8a1c96499a53fe9a4feb077f90cfe4b12e7584e487c448d"
+    },
+    {
+      "path": "vendor/third_party/dx7/EngineMkI.cpp",
+      "sha256": "8d3dedb0c8c2265e67ebaefe955074d22e3e033c8bb73bc1be754e7f540f61e2"
+    },
+    {
+      "path": "vendor/third_party/dx7/EngineMkI.h",
+      "sha256": "29e5f1c73f43e57f0c6c483585dc7f4e083e1ec6e1b8104eb8ce918664bc3268"
+    },
+    {
+      "path": "vendor/third_party/dx7/LICENSE-APACHE-2.0",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "vendor/third_party/dx7/LICENSE-GPL-3.0",
+      "sha256": "0b383d5a63da644f628d99c33976ea6487ed89aaa59f0b3257992deac1171e6b"
+    },
+    {
+      "path": "vendor/third_party/dx7/README.md",
+      "sha256": "c29a939571451f5fb349eb4d59eb88a9d7c9b50d09be82cb952e34eede888a0e"
+    },
+    {
+      "path": "vendor/third_party/dx7/sysex-format.txt",
+      "sha256": "90f72fde9ad65ebacf6d508caa969d1081f2aee5a14d4c7f3f249ffd05388512"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/aligned_buf.h",
+      "sha256": "6140a81aacae153220ce80aa58f5d7efcd5b3a2c8389fef14ed35deb14d62caf"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/controllers.h",
+      "sha256": "d101226c3ff5b554a7f519dde199351a0355fc3692867cead833c70d62ceffeb"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/dx7note.cc",
+      "sha256": "c48250f35fa2199a23b6f61dc33b7cabb2863e82c40e493886e687aa5a7f9fb1"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/dx7note.h",
+      "sha256": "d93b2161d07335ecc0feefe45d79fb274725d8c65804ecb5649e24d2e87239ef"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/env.cc",
+      "sha256": "ae9ffce8166fc9b3db79a9cf15981685e1f4d83fdd724a2c16a815fca8676b6b"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/env.h",
+      "sha256": "05329e92bbcb561e17582bf8bebf3632f32e1f8df96775b4ba1ac82059d28298"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/exp2.cc",
+      "sha256": "ddb20f9767215a23ae86d85340e9593dfc93b315489b9936b5393345348e3e36"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/exp2.h",
+      "sha256": "9596bcebf8ad9bb87cb8b7fcf82ffc9c6fe68c5c6cedbd09c370debbee659144"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/fm_core.cc",
+      "sha256": "8e57751ee2bbeb12f96e1bb5666c937c20017d260e00bd8388a4ad330a9aa2a6"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/fm_core.h",
+      "sha256": "528389d74d0e136a4f8167047e5ed11730f2663938eb71454c8922780ee4a280"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/fm_op_kernel.cc",
+      "sha256": "ad00f2c63bf8163624a367478969f5a250568a9c6c0dcee348a4eb0b7848b21b"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/fm_op_kernel.h",
+      "sha256": "77c12aae2c5c3c2cacd541e693e4fdbc28f474c8446aa5d6711cf4908ebb07e6"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/freqlut.cc",
+      "sha256": "25a547d33303318772cf7ea78e3b8da10382ed32a07db8099635b6fd2f113647"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/freqlut.h",
+      "sha256": "91be7de9239159364614d96f707754528130dc022612e35350e5a65c1060799b"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/lfo.cc",
+      "sha256": "63a4da54b7a9d6161f355ac3a4a293e21c63e1295ca43c8fe1fcd586fe529729"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/lfo.h",
+      "sha256": "d21527675911a53f6d05b0c1ece3eeb08b906ae4513c36a8e2de02d628934ec4"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/module.h",
+      "sha256": "0e67a96d0774b4b7ecdd173d0668c40322779df1efb0506f54599127d0453646"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/pitchenv.cc",
+      "sha256": "cc6d02cc1474dc42254e1bf152ceb729f96045a755815b3334fe07e6875ced22"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/pitchenv.h",
+      "sha256": "e46210c5d66406a07aff6446d772d4d5a065ce31168d91e2354460f0f7d493cb"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/porta.cpp",
+      "sha256": "0e68f1e121fcaf26ee2f5dd022ff759006140d0305ae70417f27ace31979f28c"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/porta.h",
+      "sha256": "fcb4791616b6d8c38b272f840766264f34548a538cbbdac7a6030a5e5bdf20c7"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/sin.cc",
+      "sha256": "ebb96ae8460af68da025659a329f72d2c64301673ad83ef54a7ac20590ad7e65"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/sin.h",
+      "sha256": "b57300e93e18a4262d7f0dec84642a7da228704bec1fddd481d2ab85ed805311"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/synth.h",
+      "sha256": "8aa3de2de1a7d303b34cae2b0cf0837e9e476ab640ff02dbf4d59ccf23e96b50"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/tuning.cc",
+      "sha256": "7194fcf73a515af262e55ac31b7a54449ea9a84bab9719e29f25ce71cd7fb64c"
+    },
+    {
+      "path": "vendor/third_party/dx7/msfa/tuning.h",
+      "sha256": "5bc2f07f41516879335656444686ea92edfaccad76fc3359594d9a7b908141fb"
+    }
+  ]
+}
