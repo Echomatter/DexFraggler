@@ -1,5 +1,2 @@
-# Source provenance hashes describe these exact vendored bytes on every host.
-native/vendor/** text eol=crlf
-native/vendor/Source/** text eol=lf
-native/vendor/third_party/dx7/README.md text eol=lf
-native/vendor/third_party/dx7/LICENSE-APACHE-2.0 text eol=lf
+# Some upstream files have mixed line endings. Keep their exact recorded bytes.
+native/vendor/** -text -whitespace

@@ -90,7 +90,7 @@ assert process.stderr.read() == "", "Renderer wrote diagnostics during the proto
 manifest = json.loads((ROOT / "source-provenance.json").read_text(encoding="utf-8-sig"))
 for item in manifest["files"]:
     copied = ROOT / item["path"]
-    assert hashlib.sha256(copied.read_bytes()).hexdigest() == item["sha256"]
+    assert hashlib.sha256(copied.read_bytes()).hexdigest() == item["sha256"], f"Source hash mismatch: {item['path']}"
     if args.source_root is not None:
         original = args.source_root / Path(item["path"]).relative_to("vendor")
         assert copied.read_bytes() == original.read_bytes(), f"Copy differs: {item['path']}"
