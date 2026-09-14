@@ -1,3 +1,4 @@
+import {localUrl} from './local-url.mjs';
 import {TARGET_VERSION,METRIC_VERSION,targetKey} from '../public/targets.mjs';
 import {RUNNER_PROTOCOL} from '../public/table-import.mjs';
 import fs from 'node:fs/promises';
@@ -63,12 +64,13 @@ function validReference(r){return r?.engine==='Dexed Mark I / native'&&r.metricV
 function completeReference(r){return validReference(r)&&r.notes.every(n=>Array.isArray(n.wave)&&Array.isArray(n.target))}
 
 /** One asynchronous compute lane; no worker is attached to an individual cell.
- * The cloud selects the least-visited focus. Every native capture is compared
+ * The local scheduler selects the least-visited focus. Every native capture is compared
  * with all 32 targets in its algorithm row before another capture is rendered.
  */
 export async function runTableRunner(options={}){
   const root=path.resolve(options.root??fileURLToPath(new URL('../',import.meta.url)));
   const config=options.config??JSON.parse(await fs.readFile(options.configPath??path.join(root,'.runtime','runner-config.json'),'utf8'));
+  if(!options.request)localUrl(config.url);
   const runtimeDir=path.resolve(root,config.runtimeDir??'.runtime');
   await fs.mkdir(runtimeDir,{recursive:true});
   const core=options.core??await import(pathToFileURL(path.join(root,'public','core.mjs')));
@@ -97,8 +99,8 @@ export async function runTableRunner(options={}){
   const request=async(body,signal)=>{
     if(options.request)return options.request(body,signal);
     const timeout=AbortSignal.timeout(25000);
-    const response=await fetch(config.url+'/api/table',{method:'POST',headers:{'Content-Type':'application/json',...(config.cookie?{Cookie:config.cookie}:{}),'OAI-Sites-Authorization':'Bearer '+config.bypass,'x-dexfraggler-worker':config.secret},body:JSON.stringify(body),signal:signal?AbortSignal.any([signal,timeout]):timeout});
-    let data;try{data=await response.json()}catch{throw Object.assign(Error(`Site returned ${response.status}`),{status:response.status})}
+    const response=await fetch(config.url+'/api/table',{method:'POST',headers:{'Content-Type':'application/json','x-dexfraggler-worker':config.secret},body:JSON.stringify(body),redirect:'error',signal:signal?AbortSignal.any([signal,timeout]):timeout});
+    let data;try{data=await response.json()}catch{throw Object.assign(Error(`Local app returned ${response.status}`),{status:response.status})}
     if(!response.ok)throw Object.assign(Error(`${response.status}: ${data.error}`),{status:response.status});
     return data;
   };

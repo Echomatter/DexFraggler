@@ -20,6 +20,16 @@ The project is a prototype, not a VST or trained predictor. The native wrapper a
 
 ## Table and desktop app
 
+Run the complete app locally with Node.js 22.13 or newer:
+
+```sh
+npm ci
+npm run build
+npm run local
+```
+
+Open http://127.0.0.1:5173. The app binds to this computer only and needs no account or cloud credentials. On Windows, launch the tray app below to start the background solver. `npm run compute` starts the same solver from a terminal and starts the local server if needed. Keep only one solver running per checkout.
+
 Set waveform anchors on any column. Columns linearly blend exact unit-peak sine, triangle, square and saw formulas. Ideal targets never come from measured results. Rows keep their algorithm fixed while tuning, levels and feedback are optimized. Click a cell to inspect it; open Cell details for measurements, operators, routing and patch download.
 
 ## Search and precision
@@ -39,18 +49,24 @@ Table progress averages all 1,024 native match scores with unmeasured cells cont
 - Tray menu: open DexFraggler, pause/resume, processor priority, download table, new scan, switch scan, import table as seeds, exit.
 - `node runner/background.mjs`: run the same scheduler without the tray.
 
-The runner reads ignored `.runtime/runner-config.json` containing the Site URL, Sites bypass credential and dedicated worker secret. These credentials are excluded from Git and publication. The tray and runner exchange atomic control/status files under `.runtime/`. The PC must be on for computation; closing the browser is safe.
+The local launcher creates ignored `.runtime/runner-config.json` with a loopback URL. The tray and runner exchange atomic control/status files under `.runtime/`. The runner starts and monitors the local web server automatically. The PC must be on for computation; closing the browser is safe. Pause state survives restarts.
 
-The Site stores independent named scans automatically. New scan keeps the current anchors and starts with no results; Switch scan resumes any saved dataset. Import table as seeds accepts current version 4 JSON: a new destination uses the uploaded anchors, while an existing destination keeps its anchors and champions. Imported patches are independently remeasured across their algorithm rows, without restoring uploaded scores or optimizer history. Pending seeds survive restarts. Restarting reconstructs optimization from saved patches and measured champions; it does not need a trial-history archive. Table JSON downloads include anchors, targets and cell results. Single-voice and complete row/column SysEx exports preserve legal DX7 codes.
+The local database stores independent named scans automatically. New scan keeps the current anchors and starts with no results; Switch scan resumes any saved dataset. Import table as seeds accepts current version 4 JSON: a new destination uses the uploaded anchors, while an existing destination keeps its anchors and champions. Imported patches are independently remeasured across their algorithm rows, without restoring uploaded scores or optimizer history. Pending seeds survive restarts. Restarting reconstructs optimization from saved patches and measured champions; it does not need a trial-history archive. Table JSON downloads include anchors, targets and cell results. Single-voice and complete row/column SysEx exports preserve legal DX7 codes.
 
 ## Development and verification
 
-- `npm ci`, then `npm run dev` or `npm run build`: Sites development server and Worker build.
+- `npm ci`, then `npm run dev` or `npm run build`: local development server or production build.
 - `node --test tests/*.test.mjs`: model, derivatives, scoring, cache, targets, scheduling and codecs.
-- `node tests/table-api.mjs`: authenticated local D1 integration, row transactions and stale-result rejection (development server required).
+- `node tests/table-api.mjs`: local SQLite integration, row transactions and stale-result rejection (isolated test server required).
 - `node tests/scans-api.mjs`: local native-renderer and desktop command integration for scan creation, switching and seed imports.
 - `powershell -File desktop/build.ps1`: rebuild the Windows tray executable.
 
-D1 migrations under `drizzle/` define persisted tables. `native/` retains the engine sources, source manifest and upstream licenses; rebuild the native executable with its CMake/MSVC configuration.
+SQLite migrations under `drizzle/` define persisted tables and apply once per database. `native/` retains the engine sources, source manifest and upstream licenses; rebuild the native executable with its CMake/MSVC configuration.
 
-WebMCP exposes `get_wavetable`, `select_wavetable_cell`, `set_wavetable_anchor` and `set_table_running` on the map and cell-details pages. The existing hosted Site remains private; sharing this repository does not provide access to its scans or credentials.
+WebMCP exposes `get_wavetable`, `select_wavetable_cell`, `set_wavetable_anchor` and `set_table_running` on the map and cell-details pages. Sharing this repository does not share your local scans.
+
+## Complete local backups
+
+All named scans, model elites, native measurements, pending seeds and history live in `.runtime/local/dexfraggler.sqlite`. That directory is ignored by Git. Set `DEXFRAGGLER_DATA_DIR` to choose another data directory. Do not run integration tests against your working database.
+
+Use `node scripts/backup-local.mjs backup.sqlite` to create a consistent complete snapshot, including while the app is open. To restore, stop the local app and runner and use the snapshot in a **new data directory**. A table JSON download remains a portable seed export; it does not contain the complete research archive. Keep the original database until the restored scans have been checked.

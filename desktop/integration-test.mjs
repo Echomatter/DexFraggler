@@ -23,7 +23,7 @@ await status();
 setInterval(()=>status(),500).unref();
 const server=http.createServer(async(req,res)=>{
  let body='';for await(const chunk of req)body+=chunk;
- const authenticated=req.headers['x-dexfraggler-worker']==='isolated-test-secret'&&req.headers['oai-sites-authorization']==='Bearer isolated-test-bypass'&&req.headers.cookie==='isolated=test';
+ const authenticated=!req.headers['oai-sites-authorization']&&!req.headers.cookie;
  const event={method:req.method,url:req.url,authenticated};
  if(req.method==='POST'){Object.assign(event,JSON.parse(body));running=event.running;await status();}
  await fs.appendFile(path.join(root,'requests.jsonl'),JSON.stringify(event)+'\n');
@@ -85,7 +85,7 @@ try{
   checks[name]=(await fs.readFile(protectedFile,'utf8'))==='preserve this file';
  }
  const events=(await fs.readFile(path.join(root,'requests.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
- checks.authenticatedHeaders=events.every(e=>e.authenticated);
+ checks.noCloudCredentials=events.every(e=>e.authenticated);
  checks.exactEndpoints=events.every(e=>e.url==='/api/table'||e.url==='/api/table?export=1');
  // Stop only the child processes launched by this isolated test. No actual project
  // runner is contacted, paused, reprioritized, started or terminated.

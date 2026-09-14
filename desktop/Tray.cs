@@ -315,27 +315,22 @@ namespace DexFragglerTray
         private Dictionary<string, object> Config()
         {
             Dictionary<string, object> config = Data.Read(Path.Combine(root, ".runtime", "runner-config.json"));
-            if (Data.Text(config, "url").Length == 0) throw new InvalidOperationException("Runner configuration is missing. Configure this project's site first.");
+            if (Data.Text(config, "url").Length == 0) throw new InvalidOperationException("Runner configuration is missing. Start the local app with npm run local first.");
             return config;
         }
         public Uri Site()
         {
             Uri value;
-            if (!Uri.TryCreate(Data.Text(Config(), "url"), UriKind.Absolute, out value) || (value.Scheme != "https" && value.Scheme != "http"))
-                throw new InvalidOperationException("The configured site address must use HTTP or HTTPS.");
+            if (!Uri.TryCreate(Data.Text(Config(), "url"), UriKind.Absolute, out value) || value.Scheme != "http" || !value.IsLoopback || value.UserInfo.Length > 0)
+                throw new InvalidOperationException("DexFraggler must use a local HTTP address.");
             return value;
         }
         private HttpClient Client()
         {
             Dictionary<string, object> config = Config();
-            string secret = Data.Text(config, "secret"), bypass = Data.Text(config, "bypass");
-            if (secret.Length == 0) throw new InvalidOperationException("The runner authorization has not been configured.");
+            Site();
             HttpClient client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
             client.Timeout = TimeSpan.FromSeconds(25);
-            client.DefaultRequestHeaders.Add("x-dexfraggler-worker", secret);
-            if (bypass.Length > 0) client.DefaultRequestHeaders.Add("OAI-Sites-Authorization", "Bearer " + bypass);
-            string cookie = Data.Text(config, "cookie");
-            if (cookie.Length > 0) client.DefaultRequestHeaders.Add("Cookie", cookie);
             return client;
         }
         private Uri Endpoint(string query) { return new Uri(Site().AbsoluteUri.TrimEnd('/') + "/api/table" + query); }
@@ -533,7 +528,6 @@ namespace DexFragglerTray
             {
                 string script = Path.Combine(root, "runner", "background.mjs");
                 if (!File.Exists(script)) throw new FileNotFoundException("The project's runner/background.mjs is missing.");
-                if (!File.Exists(Path.Combine(runtime, "runner-config.json"))) throw new FileNotFoundException("Configure the project's runner before starting it.");
                 using (Process process = DetachedRunner.Start(NodePath(), script, root, runtime))
                 {
                     RecordLaunch(process);
@@ -596,7 +590,7 @@ namespace DexFragglerTray
                 if (!paused && !selfTest) { lastLaunchAttempt = 0; EnsureRunner(); }
                 RefreshState();
                 try { await remote.Running(!paused); Show(paused ? "Computation paused. Checkpoints are retained." : "Computation resumed."); return true; }
-                catch { Show("The local " + (paused ? "pause" : "resume") + " is saved. Site synchronization is pending; check the connection.", true); return false; }
+                catch { Show("The local " + (paused ? "pause" : "resume") + " is saved. Local app synchronization is pending; check the connection.", true); return false; }
             }
             catch { Show("The local pause/resume control could not be saved.", true); throw; }
             finally { toggling = false; RefreshState(); }

@@ -8,8 +8,7 @@ import {columnTargets,TARGET_VERSION,METRIC_VERSION} from '../public/targets.mjs
 import {RUNNER_PROTOCOL} from '../public/table-import.mjs';
 import {runTableRunner} from '../runner/table-runner.mjs';
 
-const base='http://localhost:5173',cookie=(await fetch(base+'/signin-with-chatgpt?return_to=/',{redirect:'manual'})).headers.get('set-cookie')?.split(';')[0];
-assert.ok(cookie);
+const base=process.env.DEXFRAGGLER_TEST_URL??'http://127.0.0.1:5174',cookie='';
 async function get(query=''){const r=await fetch(base+'/api/table'+query,{headers:{cookie}});assert.equal(r.status,200);return r.json()}
 async function post(body,expected=200){const r=await fetch(base+'/api/table',{method:'POST',headers:{cookie,'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await r.json();assert.equal(r.status,expected,JSON.stringify(data));return data}
 const original=await get(),before=await get('?export=1');

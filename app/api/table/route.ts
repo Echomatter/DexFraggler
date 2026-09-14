@@ -1,6 +1,6 @@
 import {scanAction} from './scans';
 import {RUNNER_PROTOCOL} from '@/public/table-import.mjs';
-import {env} from 'cloudflare:workers';
+import {localRequest} from '@/runner/local-url.mjs';
 import {database} from '@/db/storage';
 import {MODEL,validatePatch,blank} from '@/public/core.mjs';
 import {TARGET_VERSION,METRIC_VERSION,DEFAULT_CONFIG,validateConfig,columnTargets,targetKey,scheduleCell} from '@/public/targets.mjs';
@@ -9,9 +9,7 @@ type Row=Record<string,unknown>;
 const json=(v:unknown,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store'}});
 const parse=(v:unknown)=>v?JSON.parse(String(v)):null;
 async function auth(req:Request){
- const secret=(env as unknown as {DEXFRAGGLER_RUNNER_SECRET?:string}).DEXFRAGGLER_RUNNER_SECRET,token=req.headers.get('x-dexfraggler-worker');
- if(secret&&token&&secret.length===token.length){const enc=new TextEncoder(),[a,b]=await Promise.all([secret,token].map(s=>crypto.subtle.digest('SHA-256',enc.encode(s))));if(new Uint8Array(a).every((v,i)=>v===new Uint8Array(b)[i]))return true}
- return !!req.headers.get('oai-authenticated-user-id');
+ return localRequest(req);
 }
 async function board(){const db=database();await db.prepare('INSERT OR IGNORE INTO map_board(id,config) VALUES(1,?)').bind(JSON.stringify(DEFAULT_CONFIG)).run();await db.prepare("INSERT OR IGNORE INTO scans(id,name,config,created_at) SELECT scan_id,'Scan 1',config,? FROM map_board WHERE id=1").bind(Date.now()).run();return (await db.prepare('SELECT * FROM map_board WHERE id=1').first())!}
 function decode(c:Row){return {...c,id:Number(c.id),algorithm:Math.floor(Number(c.id)/32)+1,slot:Number(c.id)%32,patch:parse(c.patch),state:parse(c.state),reference:parse(c.reference)}}
@@ -36,7 +34,7 @@ function validateCheckpoint(x:Record<string,any>,id:number,config:Record<string,
  return {s,r,current};
 }
 export async function GET(req:Request){try{
- if(!await auth(req))return json({error:'Sign in to load your table.'},401);
+ if(!await auth(req))return json({error:'Local access only.'},403);
  const b=await board(),config=parse(b.config),targets=columnTargets(config),keys=targets.map(targetKey),url=new URL(req.url),db=database();
  if(url.searchParams.has('scans'))return json({activeScanId:b.scan_id,generation:b.generation,scans:(await db.prepare('SELECT s.id,s.name,s.created_at,(SELECT count(*) FROM map_cells c WHERE c.scan_id=s.id) AS cells,(SELECT count(*) FROM scan_seeds q WHERE q.scan_id=s.id) AS pendingSeeds FROM scans s ORDER BY s.created_at DESC').all()).results});
  if(url.searchParams.has('cell')){const id=cellId(Number(url.searchParams.get('cell'))),c=await db.prepare('SELECT * FROM map_cells WHERE scan_id=? AND id=?').bind(b.scan_id,id).first();return json({cell:c?{...decode(c),current:c.target_key===keys[id%32]}:null,config,revision:b.revision,target:targets[id%32]})}
@@ -53,7 +51,7 @@ export async function GET(req:Request){try{
  return json({scan,pendingSeeds:Number(pendingSeeds?.count??0),config,revision:b.revision,generation:b.generation,running:!!b.running,activeId,activeIds:activeId===null?[]:Array.from({length:32},(_,i)=>Math.floor(activeId/32)*32+i),cells:cells.map(c=>({...c,current:c.target_key===keys[Number(c.id)%32],target_key:undefined})),workers:workers.results.map(w=>({...w,status:parse(w.engine)}))});
  }catch(e){return json({error:e instanceof Error?e.message:'Table unavailable.'},400)}}
 export async function POST(req:Request){try{
- if(!await auth(req))return json({error:'Sign in to change your table.'},401);
+ if(!await auth(req))return json({error:'Local access only.'},403);
  const origin=req.headers.get('origin');if(origin&&origin!==new URL(req.url).origin)return json({error:'Origin is not allowed.'},403);
  if(Number(req.headers.get('content-length'))>4000000)return json({error:'Send a smaller batch.'},413);
  const text=await req.text();if(text.length>4000000)return json({error:'Send a smaller batch.'},413);

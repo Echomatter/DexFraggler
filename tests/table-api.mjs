@@ -5,11 +5,9 @@ import {TARGET_VERSION,columnTargets,targetKey,validateTarget} from '../public/t
 import {METRIC_VERSION} from '../runner/measurement.mjs';
 import {Reference} from '../runner/reference.mjs';
 
-const base=(process.env.DEXFRAGGLER_TEST_URL??'http://localhost:5173').replace(/\/$/,'');
+const base=(process.env.DEXFRAGGLER_TEST_URL??'http://127.0.0.1:5174').replace(/\/$/,'');
 assert.ok(['localhost','127.0.0.1','[::1]'].includes(new URL(base).hostname),'API validation must use the isolated local database.');
-const login=await fetch(base+'/signin-with-chatgpt?return_to=/',{redirect:'manual'});
-const cookie=login.headers.get('set-cookie')?.split(';')[0];
-assert.ok(cookie,'The local sign-in route must provide its development cookie.');
+const cookie='';
 
 async function get(path=''){
  const response=await fetch(base+'/api/table'+path,{headers:{cookie}});
@@ -38,8 +36,8 @@ function stateFor(target,algorithm){return initialState(target,[],127,algorithm)
 
 const original=await get(),reference=new Reference();
 try{
- assert.equal((await fetch(base+'/api/table')).status,401);
- assert.equal((await fetch(base+'/api/table',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'running',running:true})})).status,401);
+ assert.equal((await fetch(base+'/api/table')).status,200);
+ assert.equal((await fetch(base+'/api/table',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://example.com'},body:JSON.stringify({action:'running',running:true})})).status,403);
  assert.equal((await post({action:'running',running:'yes'})).status,400);
  const cross=await fetch(base+'/api/table',{method:'POST',headers:{cookie,Origin:'https://example.com','Content-Type':'application/json'},body:JSON.stringify({action:'running',running:true})});
  assert.equal(cross.status,403);
@@ -165,7 +163,7 @@ try{
  assert.ok(backup.cells.length>=32);assert.ok(backup.cells.length<=1024);
  assert.ok(backup.cells.every(cell=>cell.state===undefined));
  assert.ok(backup.cells.some(cell=>cell.reference?.notes.length===3));
- console.log('Table API passed: authentication, current-engine handshake, concurrent row leases, atomic 32-cell checkpoints, model/native monotonic saves, visits, pause, stale generations, ideal anchors, version 4 export and removed-action rejection.');
+ console.log('Table API passed: local access boundaries, current-engine handshake, concurrent row leases, atomic 32-cell checkpoints, model/native monotonic saves, visits, pause, stale generations, ideal anchors, version 4 export and removed-action rejection.');
 }finally{
  await reference.close();
  await successful({action:'running',running:false});
