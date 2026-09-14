@@ -53,7 +53,11 @@ export default defineConfig(async () => {
   return {
     server: {
       ...(managedLinux ? { host: "0.0.0.0", allowedHosts: ["terminal.local"] } : {}),
-      ...(isCodexSeatbeltSandbox ? { watch: { useFsEvents: false, usePolling: true } } : {}),
+      watch: {
+        // Tray status uses atomic file replacement; it is runtime data, not HMR input.
+        ignored: (filePath: string) => filePath.split(/[\\/]/).includes('.runtime'),
+        ...(isCodexSeatbeltSandbox ? { useFsEvents: false, usePolling: true } : {}),
+      },
     },
     plugins: [
       vinext(),
