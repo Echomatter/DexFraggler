@@ -9,7 +9,6 @@ $desktopDirectory = [Environment]::GetFolderPath('DesktopDirectory')
 $startupDirectory = [Environment]::GetFolderPath('Startup')
 $desktopLink = Join-Path $desktopDirectory 'DexFraggler.lnk'
 $startupLink = Join-Path $startupDirectory 'DexFraggler.lnk'
-$legacyLink = Join-Path $startupDirectory 'DexFraggler background runner.lnk'
 $shellObject = New-Object -ComObject WScript.Shell
 function Test-SameProjectShortcut($Shortcut) {
     $target = [string]$Shortcut.TargetPath
@@ -27,12 +26,6 @@ foreach ($linkPath in @($desktopLink, $startupLink)) {
         finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($existing) }
     }
 }
-$legacyOwned = $false
-if (Test-Path -LiteralPath $legacyLink) {
-    $legacy = $shellObject.CreateShortcut($legacyLink)
-    try { $legacyOwned = Test-SameProjectShortcut $legacy }
-    finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($legacy) }
-}
 foreach ($linkPath in @($desktopLink, $startupLink)) {
     if ($PSCmdlet.ShouldProcess($linkPath, 'Create the DexFraggler tray shortcut')) {
         $shortcut = $shellObject.CreateShortcut($linkPath)
@@ -48,10 +41,5 @@ foreach ($linkPath in @($desktopLink, $startupLink)) {
         } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) }
     }
 }
-$legacyRemoved = $false
-if ($legacyOwned -and $PSCmdlet.ShouldProcess($legacyLink, "Remove this project's obsolete background-runner shortcut")) {
-    Remove-Item -LiteralPath $legacyLink -Force
-    $legacyRemoved = $true
-}
 [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shellObject)
-@{ projectRoot=$resolvedRoot; executable=$trayPath; desktopShortcut=$desktopLink; startupShortcut=$startupLink; obsoleteShortcutRemoved=$legacyRemoved; processLaunched=$false } | ConvertTo-Json
+@{ projectRoot=$resolvedRoot; executable=$trayPath; desktopShortcut=$desktopLink; startupShortcut=$startupLink; processLaunched=$false } | ConvertTo-Json

@@ -2,7 +2,7 @@ import {spawn} from 'node:child_process';
 import readline from 'node:readline';
 import {fileURLToPath} from 'node:url';
 import {sysex,clone} from '../public/core.mjs';
-import {prepareAudio,scorePrepared} from './measurement.mjs';
+import {METRIC_VERSION,prepareAudio,scorePrepared} from './measurement.mjs';
 
 const BINARY_SHA256='d67045da4b058bb1c7ff62cc347e5cfbd3ea67e260475bb10a7a00cc04d2b5e2';
 const DEFAULT_EXE=fileURLToPath(new URL('../native/bin/DexfragglerReference.exe',import.meta.url));
@@ -95,16 +95,15 @@ export class Reference {
   return entry.contexts;
  }
 
- async score(patch,target,h=32){return (await this.scoreMany(patch,[target],h))[0];}
+ async score(patch,target){return (await this.scoreMany(patch,[target]))[0];}
 
- async scoreMany(patch,targets,h=32,{preview=true}={}){
+ async scoreMany(patch,targets,{preview=true}={}){
   if(!Array.isArray(targets))throw Error('Targets must be an array.');
-  if(!Number.isInteger(h)||h<1||h>64)throw Error('Target bandwidth must be 1 through 64 harmonics.');
   if(!targets.length)return [];
   const entry=await this.entry(patch),contexts=this.contexts(entry);
   return targets.map(target=>{
-   const notes=contexts.map(context=>scorePrepared(context,target,h,{preview}));
-   return {engine:'Dexed Mark I / native',sampleRate:48000,velocity:100,captureSamples:4096,offsetSamples:7200,
+   const notes=contexts.map(context=>scorePrepared(context,target,{preview}));
+   return {engine:'Dexed Mark I / native',metricVersion:METRIC_VERSION,sampleRate:48000,velocity:100,captureSamples:4096,offsetSamples:7200,
     patch:clone(patch),notes,loss:Math.max(...notes.map(note=>note.error**2)),score:Math.min(...notes.map(note=>note.score)),testedAt:Date.now(),
     binarySha256:BINARY_SHA256,sourceManifest:'native/source-provenance.json'};
   });

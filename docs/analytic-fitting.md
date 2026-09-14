@@ -8,4 +8,4 @@ The renderer advances every phase with the same per-sample recurrence. During wa
 
 Muted levels are locally flat, so discrete proposals continue to activate operators. Nonfinite feedback tangents return an unchanged proposal rather than contaminating the solve.
 
-`tests/jacobian.test.mjs` covers every algorithm and feedback amount, carrier components, fixed oscillators, detuning and central finite differences. Across 768 derivative comparisons, maximum relative error was 3.14e-9. A 96-patch benchmark measured 5.36× faster level fitting and 2.93× faster model rendering. Individual proposals can fail to improve, and the acceptance test rejects them.
+`tests/jacobian.test.mjs` covers every algorithm and feedback amount, carrier components, fixed oscillators, detuning and central finite differences. Across 768 derivative comparisons, maximum relative error was 3.14e-9. Individual proposals can fail to improve, and the acceptance test rejects them.

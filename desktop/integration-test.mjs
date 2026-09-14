@@ -27,8 +27,12 @@ const server=http.createServer(async(req,res)=>{
  res.setHeader('content-type','application/json');
  if(!authenticated){res.writeHead(401);res.end('{}');return;}
  if(req.method==='POST'){res.end(JSON.stringify({ok:true}));return;}
- let mode;try{mode=JSON.parse(await fs.readFile(path.join(root,'response-mode.json'),'utf8'));}catch{mode={version:2};}
- res.end(JSON.stringify({format:mode.invalid?'not-a-table':'dexfraggler-table',version:mode.version,cells:[{algorithm:1,slot:0,patch:{}}]}));
+ let mode;try{mode=JSON.parse(await fs.readFile(path.join(root,'response-mode.json'),'utf8'));}catch{mode={version:4};}
+ const table={format:mode.invalid?'not-a-table':'dexfraggler-table',version:mode.version,targetVersion:'ideal-waveform-v1',config:{allowDetune:false,anchors:[{slot:0,shape:'triangle'},{slot:31,shape:'saw'}]},targets:Array.from({length:32},(_,slot)=>({kind:'ideal-waveform-v1',weights:[0,1-slot/31,0,slot/31]})),model:'test-model',cells:[{algorithm:1,slot:0,patch:{}}]};
+ if(mode.fourier) { table.config.harmonics=32; table.targets[0]={kind:'fourier-v1',sin:[1],cos:[0]}; }
+ if(mode.unknownTargetVersion) table.targetVersion='unknown';
+ if(mode.empty) table.cells=[];
+ res.end(JSON.stringify(table));
 });
 server.listen(0,'127.0.0.1',async()=>{await fs.writeFile(path.join(root,'ready.json'),JSON.stringify({port:server.address().port}));});
 `;
@@ -63,16 +67,20 @@ try{
  checks.resumeMenuLogic=result.localSaved&&!result.paused&&result.siteSynchronized&&!(await read('.runtime/runner-control.json')).paused;
  result=await cli(['--command','priority','--value','BelowNormal']);
  checks.priorityAppliedToOwnedStub=result.priority==='BelowNormal'&&result.ownedWorkerPriority==='BelowNormal';
- for(const version of [2,3]){
-  await fs.writeFile(path.join(root,'response-mode.json'),JSON.stringify({version}));
-  const output=path.join(root,'table-v'+version+'.json');
-  result=await cli(['--command','download-to-path','--output',output]);
-  checks['downloadV'+version]=result.ok&&(await read('table-v'+version+'.json')).version===version;
- }
+ await fs.writeFile(path.join(root,'response-mode.json'),JSON.stringify({version:4}));
+ const output=path.join(root,'table-v4.json');
+ result=await cli(['--command','download-to-path','--output',output]);
+ const saved=await read('table-v4.json');
+ checks.downloadV4=result.ok&&saved.version===4&&saved.targetVersion==='ideal-waveform-v1'&&saved.targets.length===32&&saved.config.anchors.length===2;
+ await fs.writeFile(path.join(root,'response-mode.json'),JSON.stringify({version:4,empty:true}));
+ result=await cli(['--command','download-to-path','--output',path.join(root,'empty-table-v4.json')]);
+ checks.downloadEmptyV4=result.ok&&(await read('empty-table-v4.json')).cells.length===0;
  const protectedFile=path.join(root,'preserved.json');await fs.writeFile(protectedFile,'preserve this file');
- await fs.writeFile(path.join(root,'response-mode.json'),JSON.stringify({version:3,invalid:true}));
- await cli(['--command','download-to-path','--output',protectedFile],1);
- checks.invalidDownloadPreservedExistingFile=(await fs.readFile(protectedFile,'utf8'))==='preserve this file';
+ for(const [name,mode] of Object.entries({rejectV2:{version:2},rejectV3:{version:3},rejectInvalidFormat:{version:4,invalid:true},rejectFourier:{version:4,fourier:true},rejectUnknownTargetVersion:{version:4,unknownTargetVersion:true}})){
+  await fs.writeFile(path.join(root,'response-mode.json'),JSON.stringify(mode));
+  await cli(['--command','download-to-path','--output',protectedFile],1);
+  checks[name]=(await fs.readFile(protectedFile,'utf8'))==='preserve this file';
+ }
  const events=(await fs.readFile(path.join(root,'requests.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
  checks.authenticatedHeaders=events.every(e=>e.authenticated);
  checks.exactEndpoints=events.every(e=>e.url==='/api/table'||e.url==='/api/table?export=1');

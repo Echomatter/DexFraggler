@@ -54,3 +54,5 @@ next-env.d.ts
 /desktop/self-test.json
 /desktop/integration-test.json
 /desktop/integration-probe-*/
+
+/desktop/export-validation-test.json

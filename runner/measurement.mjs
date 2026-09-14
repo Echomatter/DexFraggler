@@ -1,190 +1,160 @@
-// Same sampled target and phase search as measurement-baseline.mjs.
-// Fourier projections prune only coarse phases that provably cannot win.
-// The final score and all 28 refinement iterations use the original interpolant.
-const TAU = 2 * Math.PI;
-const TABLE_SIZE = 32768;
-const MASK = TABLE_SIZE - 1;
-const MAX_H = 64;
-const basisCache = new Map();
-const tableCache = new Map();
-const planCache = new Map();
-let targetBasis;
-const diagnostics = {preparedAudio: 0, plans: 0, coarseExact: 0, coarsePruned: 0, fineExact: 0};
+import {METRIC_VERSION,coefficients,nyquistHarmonics,projectionInfo,sample,targetKey} from '../public/targets.mjs';
 
-export function scoringDiagnostics() { return {...diagnostics, basisCount:basisCache.size, tableCount:tableCache.size, planCount:planCache.size}; }
+const TAU=2*Math.PI,SAMPLE_RATE=48000,SCORE_TOLERANCE=1e-10,ROUNDING_ALLOWANCE=1e-11;
+export {METRIC_VERSION};
+const basisCache=new Map(),planCache=new Map();
+const diagnostics={preparedAudio:0,plans:0,phaseEvaluations:0,subdivisions:0};
+export function scoringDiagnostics(){return {...diagnostics,basisCount:basisCache.size,planCount:planCache.size};}
+function remember(cache,key,value,limit){if(cache.size>=limit)cache.delete(cache.keys().next().value);cache.set(key,value);return value;}
+function powerOfTwo(n){let result=1;while(result<n)result*=2;return result;}
 
-function coefficients(shape, bands) {
-  const sin = new Float64Array(bands), cos = new Float64Array(bands);
-  if (shape && typeof shape === 'object') {
-    for (let k = 0; k < bands; k++) {
-      sin[k] = shape.sin[k] || 0;
-      cos[k] = shape.cos[k] || 0;
-    }
-  } else {
-    if (!['saw', 'square', 'triangle', 'sine'].includes(shape)) throw Error('Unknown target.');
-    for (let k = 1; k <= bands; k++) {
-      if (shape === 'sine') sin[k-1] = k === 1 ? 1 : 0;
-      else if (shape === 'saw' || (shape === 'square' && k % 2)) sin[k-1] = 1/k;
-      else if (shape === 'triangle' && k % 2) cos[k-1] = 1/(k*k);
-    }
+// c[k] cos(k phi) + s[k] sin(k phi), including c[0].
+function squareSeries(c,s){
+  const h=c.length-1,cos=new Float64Array(2*h+1),sin=new Float64Array(2*h+1);
+  cos[0]=c[0]*c[0];
+  for(let k=1;k<=h;k++){cos[k]+=2*c[0]*c[k];sin[k]+=2*c[0]*s[k];}
+  for(let k=1;k<=h;k++)for(let j=1;j<=h;j++){
+    const d=k-j,a=c[k]*c[j],b=s[k]*s[j];
+    cos[Math.abs(d)]+=(a+b)/2;cos[k+j]+=(a-b)/2;
+    sin[k+j]+=(c[k]*s[j]+s[k]*c[j])/2;
+    if(d)sin[Math.abs(d)]+=Math.sign(d)*(s[k]*c[j]-c[k]*s[j])/2;
   }
-  return {sin, cos};
+  return {cos,sin};
 }
-
-function getTargetBasis() {
-  if (targetBasis) return targetBasis;
-  targetBasis = new Float64Array(TABLE_SIZE * MAX_H * 2);
-  for (let i = 0; i < TABLE_SIZE; i++) {
-    const theta = i / TABLE_SIZE * TAU;
-    const offset = i * MAX_H * 2;
-    for (let k = 1; k <= MAX_H; k++) {
-      targetBasis[offset + 2*(k-1)] = Math.sin(k*theta);
-      targetBasis[offset + 2*(k-1)+1] = Math.cos(k*theta);
+function inverseFft(real,imag){
+  const n=real.length;
+  for(let i=1,j=0;i<n;i++){let bit=n>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;if(i<j){[real[i],real[j]]=[real[j],real[i]];[imag[i],imag[j]]=[imag[j],imag[i]];}}
+  for(let length=2;length<=n;length*=2){
+    const wr0=Math.cos(TAU/length),wi0=Math.sin(TAU/length);
+    for(let start=0;start<n;start+=length){let wr=1,wi=0;
+      for(let j=0;j<length/2;j++){
+        const a=start+j,b=a+length/2,tr=wr*real[b]-wi*imag[b],ti=wr*imag[b]+wi*real[b];
+        real[b]=real[a]-tr;imag[b]=imag[a]-ti;real[a]+=tr;imag[a]+=ti;
+        const next=wr*wr0-wi*wi0;wi=wr*wi0+wi*wr0;wr=next;
+      }
     }
   }
-  return targetBasis;
+  for(let i=0;i<n;i++)real[i]/=n;
+  return real;
 }
+function onGrid(c,s,n){
+  const real=new Float64Array(n),imag=new Float64Array(n);real[0]=n*c[0];
+  for(let k=1;k<c.length;k++){
+    if(k===n/2){real[k]=n*c[k];continue;}
+    real[k]=real[n-k]=n*c[k]/2;imag[k]=-n*s[k]/2;imag[n-k]=n*s[k]/2;
+  }
+  return inverseFft(real,imag);
+}
+function bounds(c,s){let a0=Math.abs(c[0]),a1=0,a2=0;for(let k=1;k<c.length;k++){const a=Math.hypot(c[k],s[k]);a0+=a;a1+=k*a;a2+=k*k*a;}return [a0,a1,a2];}
 
-function getBasis(note, n) {
-  const key = `${note}:${n}`;
-  if (basisCache.has(key)) return basisCache.get(key);
-  const base = 440 * 2**((note-69)/12);
-  const step = base / 48000 * TABLE_SIZE;
-  const positions = Float64Array.from({length:n}, (_,i) => (i*step)%TABLE_SIZE);
-  const basis = new Float64Array(n * MAX_H * 2);
-  for (let i = 0; i < n; i++) {
-    const theta = positions[i] / TABLE_SIZE * TAU;
-    const offset = i * MAX_H * 2;
-    for (let k = 1; k <= MAX_H; k++) {
-      basis[offset + 2*(k-1)] = Math.sin(k*theta);
-      basis[offset + 2*(k-1)+1] = Math.cos(k*theta);
+function samplingFor(note,n){
+  const key=`${note}:${n}`;if(basisCache.has(key))return basisCache.get(key);
+  const base=440*2**((note-69)/12),bands=nyquistHarmonics(base,SAMPLE_RATE);
+  if(bands>4096)throw Error('This analysis pitch is below the supported native range.');
+  const step=TAU*base/SAMPLE_RATE,basis=new Float64Array(n*bands*2);
+  const sinSum=new Float64Array(2*bands+1),cosSum=new Float64Array(2*bands+1);cosSum[0]=n;
+  for(let i=0;i<n;i++){
+    const theta=i*step,ds=Math.sin(theta),dc=Math.cos(theta);let s=0,c=1;
+    for(let k=1;k<=2*bands;k++){
+      const next=s*dc+c*ds;c=c*dc-s*ds;s=next;
+      sinSum[k]+=s;cosSum[k]+=c;
+      if(k<=bands){const offset=(i*bands+k-1)*2;basis[offset]=s;basis[offset+1]=c;}
     }
   }
-  const result = {base, step, positions, basis};
-  // The production workload uses three pitches with one capture length.
-  if (basisCache.size >= 8) basisCache.delete(basisCache.keys().next().value);
-  basisCache.set(key, result);
-  return result;
+  return remember(basisCache,key,{base,bands,step,basis,sinSum,cosSum},8);
 }
-
-export function prepareAudio(audio, note) {
-  if (!audio || !audio.length || !Number.isFinite(note)) throw Error('Expected a nonempty audio capture and finite MIDI note.');
-  const n = audio.length;
-  const mean = audio.reduce((sum,x) => sum+x, 0)/n;
-  const centered = Float64Array.from(audio, x => x-mean);
-  const energy = centered.reduce((sum,x) => sum+x*x, 0);
-  if (!Number.isFinite(energy)) throw Error('Audio must contain finite samples.');
-  const sampling = getBasis(note,n);
-  const moments = new Float64Array(MAX_H*2);
-  for (let i = 0; i < n; i++) {
-    const value = centered[i], offset = i*MAX_H*2;
-    for (let j = 0; j < MAX_H*2; j++) moments[j] += value*sampling.basis[offset+j];
-  }
+export function prepareAudio(audio,note){
+  if(!audio||audio.length<3||!Number.isFinite(note))throw Error('Expected at least three finite audio samples and a MIDI note.');
+  const n=audio.length,mean=audio.reduce((sum,x)=>sum+x,0)/n,centered=Float64Array.from(audio,x=>x-mean),energy=centered.reduce((sum,x)=>sum+x*x,0);
+  if(!Number.isFinite(energy))throw Error('Audio must contain finite samples.');
+  const sampling=samplingFor(note,n),moments=new Float64Array(sampling.bands*2);
+  for(let i=0;i<n;i++){const offset=i*moments.length,value=centered[i];for(let j=0;j<moments.length;j++)moments[j]+=value*sampling.basis[offset+j];}
   diagnostics.preparedAudio++;
   return {audio,n,note,mean,centered,energy,moments,...sampling};
 }
-
-function getTable(shape, bands) {
-  const {sin,cos} = coefficients(shape,bands);
-  const key = JSON.stringify([Array.from(sin),Array.from(cos)]);
-  if (tableCache.has(key)) return tableCache.get(key);
-  const basis = getTargetBasis();
-  const table = new Float64Array(TABLE_SIZE);
-  for (let i = 0; i < TABLE_SIZE; i++) {
-    let y=0;
-    const offset=i*MAX_H*2;
-    for (let k=0; k<bands; k++) y += sin[k]*basis[offset+2*k]+cos[k]*basis[offset+2*k+1];
-    table[i]=y;
+function planFor(prepared,target){
+  const key=`${prepared.note}:${prepared.n}:${targetKey(target)}`;if(planCache.has(key))return planCache.get(key);
+  const {bands:h,n,sinSum,cosSum}=prepared,{sin:b}=coefficients(target,h);
+  const zeros=new Float64Array(h+1),series=Float64Array.from([0,...b]);
+  const squared=squareSeries(zeros,series),meanC=new Float64Array(h+1),meanS=new Float64Array(h+1);
+  for(let k=1;k<=h;k++){meanC[k]=b[k-1]*sinSum[k];meanS[k]=b[k-1]*cosSum[k];}
+  const meanSquared=squareSeries(meanC,meanS),energyC=new Float64Array(2*h+1),energyS=new Float64Array(2*h+1);
+  for(let k=0;k<=2*h;k++){
+    energyC[k]=squared.cos[k]*cosSum[k]-meanSquared.cos[k]/n;
+    energyS[k]=-squared.cos[k]*sinSum[k]-meanSquared.sin[k]/n;
   }
-  if (table.reduce((sum,x)=>sum+x*x,0)<1e-12) throw Error('Target is silent at this pitch after Nyquist truncation.');
-  // Linear interpolation error <= max|f''| * angularStep^2 / 8.
-  // Extra roundoff allowance covers the harmonic projection identity.
-  let curvature=0;
-  for (let k=1;k<=bands;k++) curvature += k*k*Math.hypot(sin[k-1],cos[k-1]);
-  const interpolationBound = curvature*(TAU/TABLE_SIZE)**2/8 + 1e-10;
-  const result={table,sin,cos,bands,key,interpolationBound};
-  if (tableCache.size>=128) tableCache.delete(tableCache.keys().next().value);
-  tableCache.set(key,result);
-  return result;
+  const energyBounds=bounds(energyC,energyS);
+  let gridSize=powerOfTwo(Math.max(128,4*h)),energyGrid=onGrid(energyC,energyS,gridSize);
+  // The interpolation remainder supplies a lower bound between grid samples.
+  let energyMinimum=Math.min(...energyGrid)-energyBounds[2]*(TAU/gridSize)**2/8;
+  while(energyMinimum<=1e-12&&gridSize<65536){gridSize*=2;energyGrid=onGrid(energyC,energyS,gridSize);energyMinimum=Math.min(...energyGrid)-energyBounds[2]*(TAU/gridSize)**2/8;}
+  if(energyMinimum<=1e-12)throw Error('The capture is too short for a nondegenerate phase comparison at this pitch.');
+  const plan={b,meanC,meanS,energyC,energyS,energyBounds,energyMinimum,gridSize,energyGrid,projection:projectionInfo(target,prepared.base,SAMPLE_RATE)};
+  diagnostics.plans++;return remember(planCache,key,plan,128);
 }
 
-function getPlan(prepared, shape, h) {
-  if (!Number.isInteger(h)||h<1||h>MAX_H) throw Error('Target bandwidth must be 1 through 64 harmonics.');
-  const bands=Math.min(h,Math.floor(23999/prepared.base));
-  const target=getTable(shape,bands);
-  const key=`${prepared.note}:${prepared.n}:${target.key}`;
-  if(planCache.has(key))return planCache.get(key);
-  const coarseWeights=new Float64Array(128*bands*2);
-  const coarseEnergy=new Float64Array(128),coarseMean=new Float64Array(128),bounds=new Float64Array(128);
-  const {table,sin,cos}=target,{positions,n}=prepared;
-  for(let q=0;q<128;q++){
-    const shift=q*256,phi=shift/TABLE_SIZE*TAU;
-    for(let k=1;k<=bands;k++){
-      const s=Math.sin(k*phi),c=Math.cos(k*phi),offset=(q*bands+k-1)*2;
-      coarseWeights[offset]=sin[k-1]*c-cos[k-1]*s;
-      coarseWeights[offset+1]=sin[k-1]*s+cos[k-1]*c;
-    }
-    let sum=0,squares=0;
-    for(let i=0;i<n;i++){
-      const pos=positions[i]+shift,j=Math.floor(pos),f=pos-j,idx=j&MASK;
-      const t=table[idx]*(1-f)+table[(idx+1)&MASK]*f;
-      sum+=t;squares+=t*t;
-    }
-    coarseEnergy[q]=squares-sum*sum/n;
-    coarseMean[q]=sum/n;
-    bounds[q]=Math.sqrt(n/coarseEnergy[q])*target.interpolationBound;
-  }
-  const plan={...target,coarseWeights,coarseEnergy,coarseMean,bounds};
-  if(planCache.size>=192)planCache.delete(planCache.keys().next().value);
-  planCache.set(key,plan);diagnostics.plans++;
-  return plan;
+class MaxHeap{
+  constructor(){this.items=[];}
+  get top(){return this.items[0];}
+  push(value){let i=this.items.length;this.items.push(value);while(i){const parent=(i-1)>>1;if(this.items[parent].upper>=value.upper)break;this.items[i]=this.items[parent];i=parent;}this.items[i]=value;}
+  pop(){const result=this.items[0],last=this.items.pop();if(this.items.length){let i=0;while(2*i+1<this.items.length){let child=2*i+1;if(child+1<this.items.length&&this.items[child+1].upper>this.items[child].upper)child++;if(this.items[child].upper<=last.upper)break;this.items[i]=this.items[child];i=child;}this.items[i]=last;}return result;}
 }
 
-export function scorePrepared(prepared, shape, h=32, options={}) {
-  const {audio,n,note,mean,centered,energy,moments,positions,step,base}=prepared;
-  const plan=getPlan(prepared,shape,h);
-  const {table,bands}=plan;
-  if(energy<1e-12)return {note,score:0,error:1,shift:0,bands,wave:[],target:[]};
-  function check(shift,q=-1){
-    let dot=0,sum=0,squares=0;
-    for(let i=0;i<n;i++){
-      const pos=positions[i]+shift,j=Math.floor(pos),f=pos-j,idx=j&MASK;
-      const t=table[idx]*(1-f)+table[(idx+1)&MASK]*f;
-      dot+=centered[i]*t;
-      if(q<0){sum+=t;squares+=t*t;}
+export function scorePrepared(prepared,target,options={}){
+  if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(key=>key!=='preview')||('preview' in options&&typeof options.preview!=='boolean'))throw Error('Scoring options only support a preview flag; bandwidth is automatic.');
+  const {preview=true}=options;
+  const {audio,n,note,mean,energy,moments,bands:h,step,base}=prepared,plan=planFor(prepared,target);
+  const metadata={note,bands:h,metricVersion:METRIC_VERSION,sampleRate:SAMPLE_RATE,retainedIdealEnergy:plan.projection.retainedEnergy};
+  if(energy<1e-12)return {...metadata,score:0,error:1,phase:0,...(preview?{wave:[],target:[],idealTarget:[]}:{})};
+  const audioNorm=Math.sqrt(energy),dotC=new Float64Array(h+1),dotS=new Float64Array(h+1);
+  for(let k=1;k<=h;k++){dotC[k]=plan.b[k-1]*moments[(k-1)*2]/audioNorm;dotS[k]=plan.b[k-1]*moments[(k-1)*2+1]/audioNorm;}
+  function at(phase,derivatives=false){
+    const ds=Math.sin(phase),dc=Math.cos(phase);let s=0,c=1,dot=0,e=plan.energyC[0],sum=0,dp=0,dpp=0,ep=0,epp=0;
+    for(let k=1;k<=2*h;k++){
+      const next=s*dc+c*ds;c=c*dc-s*ds;s=next;
+      const ec=plan.energyC[k],es=plan.energyS[k],ev=ec*c+es*s;e+=ev;
+      if(derivatives){ep+=k*(-ec*s+es*c);epp-=k*k*ev;}
+      if(k<=h){const v=dotC[k]*c+dotS[k]*s;dot+=v;sum+=plan.meanC[k]*c+plan.meanS[k]*s;
+        if(derivatives){dp+=k*(-dotC[k]*s+dotS[k]*c);dpp-=k*k*v;}}
     }
-    const et=q<0?squares-sum*sum/n:plan.coarseEnergy[q];
-    return {score:Math.max(0,Math.min(1,dot/Math.sqrt(energy*et))),scale:dot/energy,shift,targetMean:q<0?sum/n:plan.coarseMean[q]};
+    diagnostics.phaseEvaluations++;return {phase,score:dot/Math.sqrt(e),dot,energy:e,sum,dp,dpp,ep,epp};
   }
-  const approximate=new Float64Array(128);
-  let bestLower=-Infinity;
-  for(let q=0;q<128;q++){
-    let dot=0;const offset=q*bands*2;
-    for(let j=0;j<bands*2;j++)dot+=moments[j]*plan.coarseWeights[offset+j];
-    approximate[q]=Math.max(0,Math.min(1,dot/Math.sqrt(energy*plan.coarseEnergy[q])));
-    bestLower=Math.max(bestLower,approximate[q]-plan.bounds[q]);
-  }
-  let best={score:-1,shift:0};
-  for(let q=0;q<128;q++){
-    if(approximate[q]+plan.bounds[q]+1e-12<bestLower){diagnostics.coarsePruned++;continue;}
-    const value=check(q*256,q);diagnostics.coarseExact++;
+  const dotBounds=bounds(dotC,dotS),[d0,d1,d2]=dotBounds,[,e1,e2]=plan.energyBounds,emin=plan.energyMinimum;
+  // Global bound on |d²/dphi² (dot / sqrt(target energy))|.
+  const curvature=d2/Math.sqrt(emin)+d1*e1/emin**1.5+.5*d0*e2/emin**1.5+.75*d0*e1*e1/emin**2.5;
+  const size=plan.gridSize,delta=TAU/size,dotGrid=onGrid(dotC,dotS,size),scores=new Float64Array(size);
+  let best={score:-Infinity,phase:0};
+  for(let i=0;i<size;i++){scores[i]=dotGrid[i]/Math.sqrt(plan.energyGrid[i]);if(scores[i]>best.score)best={score:scores[i],phase:i*delta};}
+  best=at(best.phase);
+  const heap=new MaxHeap();
+  function add(a,b,fa,fb){const upper=Math.max(fa,fb)+curvature*(b-a)**2/8+ROUNDING_ALLOWANCE;if(upper>best.score+SCORE_TOLERANCE)heap.push({a,b,fa,fb,upper});}
+  for(let i=0;i<size;i++)add(i*delta,(i+1)*delta,scores[i],scores[(i+1)%size]);
+  while(heap.top&&heap.top.upper>best.score+SCORE_TOLERANCE){
+    const interval=heap.pop(),middle=(interval.a+interval.b)/2,value=at(middle);diagnostics.subdivisions++;
     if(value.score>best.score)best=value;
+    add(interval.a,middle,interval.fa,value.score);add(middle,interval.b,value.score,interval.fb);
   }
-  let left=best.shift-256,right=best.shift+256;
-  for(let iteration=0;iteration<28;iteration++){
-    const a=left+(right-left)/3,b=right-(right-left)/3,x=check(a),y=check(b);
-    diagnostics.fineExact+=2;
-    if(x.score>best.score)best=x;
-    if(y.score>best.score)best=y;
-    if(x.score<y.score)left=a;else right=b;
+  // Newton polishing improves phase precision after the global score bound.
+  for(let i=0;i<8;i++){
+    const value=at(best.phase,true),f=2*value.dp*value.energy-value.dot*value.ep;
+    const derivative=2*value.dpp*value.energy+value.dp*value.ep-value.dot*value.epp;
+    if(!Number.isFinite(derivative)||derivative>=0)break;
+    const change=f/derivative;if(!Number.isFinite(change)||Math.abs(change)>delta)break;
+    const candidate=at((best.phase-change+TAU)%TAU);
+    if(candidate.score+1e-14<best.score)break;best=candidate;if(Math.abs(change)<1e-13)break;
   }
-  const result={note,score:best.score,error:Math.sqrt(Math.max(0,1-best.score**2)),shift:best.shift,bands};
-  if(options.preview===false)return result;
-  const viewN=Math.min(n,Math.round(2*48000/base));
-  function at(pos){const j=Math.floor(pos),f=pos-j,idx=j&MASK;return table[idx]*(1-f)+table[(idx+1)&MASK]*f;}
-  result.wave=Array.from({length:512},(_,i)=>{const pos=i/511*(viewN-1),idx=Math.floor(pos),f=pos-idx;return ((audio[idx]*(1-f)+audio[Math.min(idx+1,n-1)]*f)-mean)*best.scale;});
-  result.target=Array.from({length:512},(_,i)=>at((i/511*(viewN-1))*step+best.shift)-best.targetMean);
+  const phase=(best.phase+TAU)%TAU,score=Math.max(0,Math.min(1,best.score));
+  const result={...metadata,score,error:Math.sqrt(Math.max(0,1-score*score)),phase,phaseScoreTolerance:SCORE_TOLERANCE};
+  if(!preview)return result;
+  const scale=best.dot/audioNorm,targetMean=best.sum/n,viewSpan=Math.min(n-1,2*SAMPLE_RATE/base);
+  result.wave=[];result.target=[];result.idealTarget=[];
+  for(let i=0;i<512;i++){
+    const position=i/511*viewSpan,idx=Math.floor(position),f=position-idx,theta=position*step+phase;
+    result.wave.push((audio[idx]*(1-f)+audio[Math.min(idx+1,n-1)]*f-mean)*scale);
+    const ds=Math.sin(theta),dc=Math.cos(theta);let projected=0,s=0,c=1;
+    for(let k=1;k<=h;k++){const next=s*dc+c*ds;c=c*dc-s*ds;s=next;projected+=plan.b[k-1]*s;}
+    result.target.push(projected-targetMean);result.idealTarget.push(sample(target,theta));
+  }
   return result;
 }
-
-export function measuredScore(audio,shape,note,h=32){return scorePrepared(prepareAudio(audio,note),shape,h);}
+export function measuredScore(audio,target,note,options={}){return scorePrepared(prepareAudio(audio,note),target,options);}

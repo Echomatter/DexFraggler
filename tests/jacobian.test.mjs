@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {blank,clone,render,fitLevels,evaluate,validatePatch} from './fixtures/core-baseline.mjs';
-import {render as renderFast,renderWithLevelJacobian,amplitudeDerivative,fitLevels as fitLevelsAnalytic} from '../public/core.mjs';
+import {render,amplitude as oracleAmplitude} from './fixtures/core-baseline.mjs';
+import {MODEL_HARMONICS,blank,clone,evaluate,validatePatch,render as renderFast,renderWithLevelJacobian,amplitudeDerivative,fitLevels as fitLevelsAnalytic} from '../public/core.mjs';
+import {idealTarget} from '../public/targets.mjs';
 
 function patch(algorithm,feedback,integer=false){
   const p=blank();p.algorithm=algorithm;p.feedback=feedback;
@@ -43,20 +44,20 @@ test('six analytic columns agree with central differences away from level knots'
   console.log({worstRelativeDerivativeError:worst,location});
 });
 
-test('piecewise low-level derivative matches the relaxed amplitude law',async()=>{
-  const {amplitude}=await import('./fixtures/core-baseline.mjs');
-  for(let level=2.37;level<99;level+=1){const eps=1e-6,fd=(amplitude(level+eps)-amplitude(level-eps))/(2*eps);assert.ok(Math.abs(amplitudeDerivative(level)-fd)<1e-8)}
+test('piecewise low-level derivative matches the relaxed amplitude law',()=>{
+  for(let level=2.37;level<99;level+=1){const eps=1e-6,fd=(oracleAmplitude(level+eps)-oracleAmplitude(level-eps))/(2*eps);assert.ok(Math.abs(amplitudeDerivative(level)-fd)<1e-8)}
   assert.equal(amplitudeDerivative(0),0);assert.equal(amplitudeDerivative(1),0);
 });
 
 test('fitter returns bounded legal discrete proposals and handles silence',()=>{
+  const target=idealTarget('saw');
   for(let algorithm=1;algorithm<=32;algorithm++)for(const feedback of [0,7]){
-    const p=patch(algorithm,feedback,true),out=fitLevelsAnalytic(p,'saw');
+    const p=patch(algorithm,feedback,true),out=fitLevelsAnalytic(p,target,MODEL_HARMONICS);
     assert.deepEqual(validatePatch(out),out);assert.equal(out.algorithm,p.algorithm);assert.equal(out.feedback,p.feedback);
     out.operators.forEach((o,i)=>assert.ok(Math.abs(o.level-p.operators[i].level)<=8));
-    assert.ok(Number.isFinite(evaluate(out,'saw').loss));
+    assert.ok(Number.isFinite(evaluate(out,target,MODEL_HARMONICS).loss));
   }
-  const silent=blank();silent.operators.forEach(o=>o.level=0);assert.deepEqual(fitLevelsAnalytic(silent,'saw'),silent);
+  const silent=blank();silent.operators.forEach(o=>o.level=0);assert.deepEqual(fitLevelsAnalytic(silent,target,MODEL_HARMONICS),silent);
 });
 
 test('derivative of nested feedback includes terminal gain and both delays',()=>{

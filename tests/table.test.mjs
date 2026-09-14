@@ -1,13 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {DEFAULT_CONFIG,coefficients,columnTargets,cycle,fromCycle,targetKey,scheduleCell} from '../public/targets.mjs';
-import {blank,initialState,runBatch,analyze,targetWave,validatePatch} from '../public/core.mjs';
+import {DEFAULT_CONFIG,columnTargets,targetKey,scheduleCell} from '../public/targets.mjs';
+import {blank} from '../public/core.mjs';
 import {bankSysex,fromBank} from '../public/bank.mjs';
-import {measuredScore} from '../runner/measurement.mjs';
-test('32 columns preserve anchors and blend full phase-sensitive waveforms',()=>{const t=columnTargets(DEFAULT_CONFIG);assert.equal(t.length,32);for(const [i,s] of [[0,'triangle'],[15,'square'],[31,'saw']]){const expected=coefficients(s);assert.ok(Math.max(...cycle(t[i]).map((x,j)=>Math.abs(x-cycle(expected)[j])))<1e-12)}const left=t[15],right=t[31],mid=t[23];const sum=left.sin.map((x,i)=>(x+right.sin[i])/2),rms=Math.sqrt(sum.reduce((a,x)=>a+x*x,0)/2);assert.ok(mid.sin.every((x,i)=>Math.abs(x-sum[i]/rms)<1e-12));assert.notEqual(targetKey(t[16]),targetKey(t[30]));});
-test('one anchor extends to every column and silent custom targets reject',()=>{const c={...DEFAULT_CONFIG,anchors:[{slot:9,shape:'sine'}]},t=columnTargets(c);assert.ok(t.every(x=>targetKey(x)===targetKey(t[0])));assert.throws(()=>fromCycle(Array(256).fill(0)));assert.throws(()=>columnTargets({...c,anchors:[]}));});
-test('distinct target caches and native target scoring stay distinct',()=>{const targets=columnTargets(DEFAULT_CONFIG);for(const t of [targets[0],targets[8],targets[31]]){const w=targetWave(t);assert.ok(analyze(w,t).score>.99999999);const a=targetWave(t,32,4096,220,.715);assert.ok(measuredScore(a,t,57).error<1e-5)}assert.ok(analyze(targetWave(targets[0]),targets[31]).score<.98)});
-test('every constrained row retains only legal patches from its algorithm',()=>{const t=columnTargets(DEFAULT_CONFIG)[7];for(let a=1;a<=32;a++){const wrong=blank();wrong.algorithm=a===32?1:32;let s=initialState(t,[{patch:wrong}],32,a);s=runBatch(s,10);for(const e of s.elites){assert.equal(e.patch.algorithm,a);validatePatch(e.patch)}assert.ok(s.nativeSeeds.every(p=>p.algorithm===a));}});
+import {tableMetrics,relativeRanks} from '../public/table-metrics.mjs';
 test('scheduler covers all 1024 cells before repeating and prioritizes stale targets',()=>{const config=DEFAULT_CONFIG,keys=columnTargets(config).map(targetKey),cells=[],seen=new Set();for(let i=0;i<1024;i++){const id=scheduleCell(cells,config,keys);assert.ok(!seen.has(id));seen.add(id);cells.push({id,visits:1,target_key:keys[id%32]})}assert.equal(seen.size,1024);assert.equal(scheduleCell(cells,config,keys),0);cells[500].target_key='obsolete';assert.equal(scheduleCell(cells,config,keys),cells[500].id)});
 test('32 voice banks round trip all algorithms and preserve legal codes',()=>{const patches=Array.from({length:32},(_,i)=>{const p=blank();p.algorithm=i+1;p.feedback=i%8;p.operators.forEach((o,j)=>{o.coarse=(i+j)%32;o.fine=(i*3+j)%100;o.level=(i+j*7)%100;o.detune=(i+j)%15;o.mode=j%2});return p});const b=bankSysex(patches,[],2);assert.equal(b.length,4104);assert.equal(b[2],1);assert.deepEqual(fromBank(b),patches);assert.throws(()=>bankSysex(patches.slice(0,31)));const bad=b.slice();bad[20]^=1;assert.throws(()=>fromBank(bad))});
-test('short custom cycles do not alias high harmonics and pitch-silent anchors reject',()=>{const sine=Array.from({length:32},(_,i)=>Math.sin(2*Math.PI*i/32)),t=fromCycle(sine,64);assert.ok(Math.abs(t.sin[0]-Math.SQRT2)<1e-12);assert.ok(t.sin.slice(1).every(x=>Math.abs(x)<1e-12));assert.throws(()=>columnTargets({...DEFAULT_CONFIG,harmonics:64,anchors:[{slot:0,shape:'custom',target:{kind:'fourier-path-v1',sin:Array(59).fill(0).concat(1),cos:Array(60).fill(0)}}]}));const keys=columnTargets(DEFAULT_CONFIG).map(targetKey);assert.notEqual(scheduleCell([{id:0,failed_until:Date.now()+60000}],DEFAULT_CONFIG,keys),0)});
+
+test('progress is the exact full-table average with unmeasured cells contributing zero',()=>{
+ const cells=[{id:0,current:true,native_score:'0.9985'},{id:32,current:true,native_score:'0.9'},{id:1,current:false,native_score:'1'},{id:2,current:true,native_score:null}];
+ const stats=tableMetrics(cells);assert.equal(stats.tableMatch,(.9985+.9)/1024);assert.equal(stats.measured,2);assert.equal(stats.columns[0],(.9985+.9)/32);assert.equal(stats.columns[1],0);
+ const full=tableMetrics(Array.from({length:1024},(_,id)=>({id,current:true,native_score:'1'})));assert.equal(full.tableMatch,1);assert.equal(full.measured,1024);
+ // Even a perfect table stays eligible; the scheduler never terminates on scores.
+ assert.equal(scheduleCell(Array.from({length:1024},(_,id)=>({id,visits:100,target_key:columnTargets(DEFAULT_CONFIG).map(targetKey)[id%32],native_score:1})),DEFAULT_CONFIG,columnTargets(DEFAULT_CONFIG).map(targetKey)),0);
+});
+test('rank colors follow relative order rather than absolute score and ties share ranks',()=>{
+ const a=relativeRanks([.9,.91,.91,.999]),b=relativeRanks([.99999,.999991,.999991,.999999]);
+ assert.deepEqual([...a.values()],[0,.5,1]);assert.deepEqual([...a.values()],[...b.values()]);assert.equal(relativeRanks([1,1,1]).get(1),.5);
+ assert.equal(relativeRanks([.1,.1,.1,.1,.2,.3]).get(.3),1);assert.equal(relativeRanks([.1,.1,.1,.1,.2,.3]).get(.1),0);
+});

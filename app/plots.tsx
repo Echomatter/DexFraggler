@@ -1,15 +1,16 @@
 'use client';
-import {Tabs,TabsList,TabsTrigger} from '@/components/ui/tabs';
+import {idealPoints} from '@/public/targets.mjs';
+import type {Target} from './table-state';
 import {Select,SelectContent,SelectItem,SelectTrigger,SelectValue} from '@/components/ui/select';
 import {algorithms} from '@/public/core.mjs';
 export type Patch={algorithm:number;feedback:number;operators:{op:number;coarse:number;fine:number;level:number;mode:number;detune:number}[]};
 export function Choice({value,onChange,items,label}:{value:string;onChange:(x:string)=>void;items:{value:string;label:string}[];label:string}){
  return <Select value={value} onValueChange={onChange}><SelectTrigger aria-label={label}><SelectValue/></SelectTrigger><SelectContent>{items.map(x=><SelectItem key={x.value} value={x.value}>{x.label}</SelectItem>)}</SelectContent></Select>;
 }
-export function Scope({wave,target}:{wave:number[];target:number[]}){
- const max=Math.max(1,...wave.map(Math.abs),...target.map(Math.abs))*1.17;
+export function Scope({wave,target,ideal,phase=0,compact=false}:{wave:number[];target:number[];ideal:Target;phase?:number;compact?:boolean}){
+ const curve=idealPoints(ideal,512,2,phase),max=Math.max(1,...wave.map(Math.abs),...target.map(Math.abs))*1.17;
  const points=(a:number[])=>a.map((x,i)=>(i/(a.length-1)*1000)+','+(150-x/max*150)).join(' ');
- return <><svg viewBox="0 0 1000 300" role="img" aria-label="Two cycles: mathematical target in amber, candidate in green"><defs><pattern id="scope-grid" width="50" height="50" patternUnits="userSpaceOnUse"><path d="M50 0H0V50" fill="none" stroke="#42513e" strokeWidth=".65"/></pattern></defs><rect width="1000" height="300" fill="url(#scope-grid)"/><path d="M0 150H1000" stroke="#68745d" strokeWidth=".7"/><polyline points={points(target)} fill="none" stroke="#e5b06a" strokeWidth="2" strokeDasharray="5 4"/><polyline points={points(wave)} fill="none" stroke="#bdde9a" strokeWidth="2.2"/></svg><div className="axis"><span>0</span><span>1 cycle</span><span>2 cycles</span></div></>;
+ return <><svg viewBox="0 0 1000 300" role="img" aria-label="Two cycles: ideal formula in amber, result in green, scored projection dotted"><path d="M0 75H1000M0 150H1000M0 225H1000M250 0V300M500 0V300M750 0V300" stroke="#42513e" strokeWidth=".65" fill="none"/>{!compact&&<polyline points={points(target)} fill="none" stroke="#b38f61" opacity=".65" strokeWidth="1.4" strokeDasharray="4 5"/>}<polyline points={curve.map((p:{x:number;y:number})=>`${p.x*500},${150-p.y/max*150}`).join(' ')} fill="none" stroke="#e5b06a" strokeWidth="2"/><polyline points={points(wave)} fill="none" stroke="#bdde9a" strokeWidth="2.2"/></svg><div className="axis"><span>0</span><span>1 cycle</span><span>2 cycles</span></div></>;
 }
 export function Routing({patch}:{patch:Patch}){
  const spec=algorithms[patch.algorithm-1],depth=Array(6).fill(0);

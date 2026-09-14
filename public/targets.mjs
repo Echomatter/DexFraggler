@@ -1,21 +1,109 @@
-export const TARGET_VERSION='fourier-path-v1';
-export const WAVEFORMS=['sine','triangle','square','saw'];
-export const DEFAULT_CONFIG={harmonics:32,allowDetune:false,anchors:[{slot:0,shape:'triangle'},{slot:15,shape:'square'},{slot:31,shape:'saw'}]};
-export function coefficients(shape,h=32){
- const sin=Array(h).fill(0),cos=Array(h).fill(0);
- for(let k=1;k<=h;k++)sin[k-1]=shape==='sine'?(k===1?1:0):shape==='saw'?1/k: k%2 ? shape==='square'?1/k:(k%4===1?1:-1)/(k*k):0;
- return normalize({kind:TARGET_VERSION,sin,cos});
-}
-function normalize(t){const e=Math.sqrt(t.sin.reduce((s,x,i)=>s+x*x+t.cos[i]**2,0)/2);if(e<1e-10)throw Error('An anchor must contain a non-silent waveform.');return {...t,sin:t.sin.map(x=>x/e),cos:t.cos.map(x=>x/e)}}
-export function validateConfig(raw){
- if(!raw||![16,32,64].includes(raw.harmonics)||typeof raw.allowDetune!=='boolean'||!Array.isArray(raw.anchors)||!raw.anchors.length||raw.anchors.length>32)throw Error('Use 1–32 anchors and 16, 32 or 64 harmonics.');
- const seen=new Set();const anchors=raw.anchors.map(a=>{if(!Number.isInteger(a.slot)||a.slot<0||a.slot>31||seen.has(a.slot))throw Error('Each anchor needs a unique slice from 1 to 32.');seen.add(a.slot);if(WAVEFORMS.includes(a.shape))return {slot:a.slot,shape:a.shape};const t=a.target;if(t?.kind!==TARGET_VERSION||!Array.isArray(t.sin)||!Array.isArray(t.cos)||t.sin.length!==t.cos.length||t.sin.length<1||t.sin.length>64||![...t.sin,...t.cos].every(x=>Number.isFinite(x)&&Math.abs(x)<=100))throw Error('Invalid custom waveform.');return {slot:a.slot,shape:'custom',name:String(a.name||'Custom').slice(0,40),target:normalize(t)}}).sort((a,b)=>a.slot-b.slot);
- return {harmonics:raw.harmonics,allowDetune:raw.allowDetune,anchors};
-}
-export function columnTargets(raw){const c=validateConfig(raw);const points=c.anchors.map(a=>({...a,target:a.shape==='custom'?normalize({kind:TARGET_VERSION,sin:Array.from({length:c.harmonics},(_,i)=>a.target.sin[i]||0),cos:Array.from({length:c.harmonics},(_,i)=>a.target.cos[i]||0)}):coefficients(a.shape,c.harmonics)}));return Array.from({length:32},(_,slot)=>{const left=points.filter(a=>a.slot<=slot).at(-1)??points[0],right=points.find(a=>a.slot>=slot)??points.at(-1),f=left.slot===right.slot?0:(slot-left.slot)/(right.slot-left.slot);const blended=normalize({kind:TARGET_VERSION,sin:left.target.sin.map((x,i)=>x*(1-f)+right.target.sin[i]*f),cos:left.target.cos.map((x,i)=>x*(1-f)+right.target.cos[i]*f)});if(blended.sin.slice(0,54).reduce((s,x,i)=>s+x*x+blended.cos[i]**2,0)<1e-12)throw Error('Every target must have audible harmonics below A4 Nyquist (harmonics 1–54).');return blended})}
-export function targetKey(t){return JSON.stringify(t)}
-export function cycle(t,n=256,h=t.sin.length,phase=0){return Array.from({length:n},(_,i)=>sample(t,2*Math.PI*i/n+phase,h))}
-export function sample(t,theta,h=t.sin.length){let y=0;for(let k=1;k<=Math.min(h,t.sin.length);k++)y+=t.sin[k-1]*Math.sin(k*theta)+t.cos[k-1]*Math.cos(k*theta);return y}
-export function fromCycle(raw,h=32){if(!Array.isArray(raw)||raw.length<32||raw.length>65536||!raw.every(Number.isFinite))throw Error('Import an array of 32–65,536 finite samples representing one cycle.');const mean=raw.reduce((s,x)=>s+x,0)/raw.length,sin=[],cos=[];for(let k=1;k<=h;k++){if(k>Math.floor((raw.length-1)/2)){sin.push(0);cos.push(0);continue}let a=0,b=0;for(let i=0;i<raw.length;i++){const theta=2*Math.PI*k*i/raw.length;a+=(raw[i]-mean)*Math.sin(theta);b+=(raw[i]-mean)*Math.cos(theta)}sin.push(2*a/raw.length);cos.push(2*b/raw.length)}return normalize({kind:TARGET_VERSION,sin,cos})}
-export function labelAt(config,slot){const anchor=config.anchors.find(a=>a.slot===slot);if(anchor)return anchor.name||anchor.shape;const left=config.anchors.filter(a=>a.slot<slot).at(-1)??config.anchors[0],right=config.anchors.find(a=>a.slot>slot)??config.anchors.at(-1);return left===right?(left.name||left.shape):`${left.name||left.shape} → ${right.name||right.shape}`}
-export function scheduleCell(cells,config,keys){const byId=new Map(cells.map(c=>[c.id,c]));const anchors=new Set(config.anchors.map(a=>a.slot));return Array.from({length:1024},(_,id)=>{const c=byId.get(id);return {id,visits:c?.target_key===keys[id%32]?c.visits:0,anchor:anchors.has(id%32)?0:1,blocked:Number(c?.failed_until)>Date.now()}}).filter(c=>!c.blocked).sort((a,b)=>a.visits-b.visits||a.anchor-b.anchor||(a.id%32)-(b.id%32)||a.id-b.id)[0]?.id??null}
+export const TARGET_VERSION='ideal-waveform-v1';
+export const METRIC_VERSION='band-limited-match-v1';
+export const WAVEFORMS=Object.freeze(['sine','triangle','square','saw']);
+export const DEFAULT_CONFIG=Object.freeze({allowDetune:false,anchors:[{slot:0,shape:'triangle'},{slot:15,shape:'square'},{slot:31,shape:'saw'}]});
+const TAU=2*Math.PI;
+const GRAM=[
+  [.5,4/Math.PI**2,2/Math.PI,1/Math.PI],
+  [4/Math.PI**2,1/3,.5,.25],
+  [2/Math.PI,.5,1,.5],
+  [1/Math.PI,.25,.5,1/3],
+];
+
+function exactKeys(value,keys){return value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));}
+export function validateTarget(value){
+  if(!exactKeys(value,['kind','weights'])||value.kind!==TARGET_VERSION||!Array.isArray(value.weights)||value.weights.length!==4
+    ||!value.weights.every(x=>Number.isFinite(x)&&x>=0&&x<=1)||Math.abs(value.weights.reduce((a,b)=>a+b,0)-1)>1e-12)
+    throw Error('A target must be a convex blend of the four ideal waveform formulas.');
+  return {kind:TARGET_VERSION,weights:value.weights.map(x=>x===0?0:x)};
+}
+export function idealTarget(shape){if(!WAVEFORMS.includes(shape))throw Error('Choose sine, triangle, square or saw.');return {kind:TARGET_VERSION,weights:WAVEFORMS.map(name=>Number(name===shape))};}
+export function blendTargets(left,right,f){
+  left=validateTarget(left);right=validateTarget(right);
+  if(!Number.isFinite(f)||f<0||f>1)throw Error('Blend position must be between zero and one.');
+  return {kind:TARGET_VERSION,weights:left.weights.map((x,i)=>x*(1-f)+right.weights[i]*f)};
+}
+export function targetKey(value){const target=validateTarget(value);return `${TARGET_VERSION}:${target.weights.join(',')}`;}
+export function validateConfig(raw){
+  if(!exactKeys(raw,['allowDetune','anchors'])||typeof raw.allowDetune!=='boolean'||!Array.isArray(raw.anchors)||raw.anchors.length<1||raw.anchors.length>32)
+    throw Error('Use 1–32 ideal waveform anchors and an explicit detuning preference.');
+  const seen=new Set();
+  const anchors=raw.anchors.map(anchor=>{
+    if(!exactKeys(anchor,['slot','shape'])||!Number.isInteger(anchor.slot)||anchor.slot<0||anchor.slot>31||seen.has(anchor.slot)||!WAVEFORMS.includes(anchor.shape))
+      throw Error('Each anchor needs a unique slice and one of the four ideal waveform formulas.');
+    seen.add(anchor.slot);return {slot:anchor.slot,shape:anchor.shape};
+  }).sort((a,b)=>a.slot-b.slot);
+  return {allowDetune:raw.allowDetune,anchors};
+}
+export function columnTargets(raw){
+  const {anchors}=validateConfig(raw);
+  return Array.from({length:32},(_,slot)=>{
+    const left=anchors.filter(a=>a.slot<=slot).at(-1)??anchors[0],right=anchors.find(a=>a.slot>=slot)??anchors.at(-1);
+    return blendTargets(idealTarget(left.shape),idealTarget(right.shape),left.slot===right.slot?0:(slot-left.slot)/(right.slot-left.slot));
+  });
+}
+export function labelAt(config,slot){
+  const anchor=config.anchors.find(a=>a.slot===slot);if(anchor)return anchor.shape;
+  const left=config.anchors.filter(a=>a.slot<slot).at(-1)??config.anchors[0],right=config.anchors.find(a=>a.slot>slot)??config.anchors.at(-1);
+  return left.shape===right.shape?left.shape:`${left.shape} → ${right.shape}`;
+}
+
+// All four formulas have unit peak. At a jump, use the Fourier midpoint;
+// idealPoints supplies both one-sided limits so SVG drawings keep sharp edges.
+function valueAt(weights,u,side=0){
+  const sine=Math.sin(TAU*u),triangle=u<.25?4*u:u<.75?2-4*u:4*u-4;
+  const square=u===0?side:u===.5?-side:u<.5?1:-1;
+  const saw=u===0?side:1-2*u;
+  return weights[0]*sine+weights[1]*triangle+weights[2]*square+weights[3]*saw;
+}
+function wrap(u){return ((u%1)+1)%1;}
+export function sample(target,theta){return valueAt(validateTarget(target).weights,wrap(theta/TAU));}
+export function cycle(target,n=256,phase=0){
+  const {weights}=validateTarget(target);if(!Number.isInteger(n)||n<2||n>65536||!Number.isFinite(phase))throw Error('Invalid ideal display size or phase.');
+  return Array.from({length:n},(_,i)=>valueAt(weights,wrap(i/n+phase/TAU)));
+}
+export function idealPoints(target,segments=128,cycles=1,phase=0){
+  const {weights}=validateTarget(target);
+  if(!Number.isInteger(segments)||segments<4||segments>65536||!Number.isFinite(cycles)||cycles<=0||cycles>16||!Number.isFinite(phase))throw Error('Invalid ideal curve extent.');
+  const offset=wrap(phase/TAU),positions=new Set(Array.from({length:segments+1},(_,i)=>i/segments*cycles));
+  for(let k=Math.ceil(offset*4);k<=Math.floor((offset+cycles)*4);k++)positions.add(k/4-offset);
+  const points=[];
+  for(const x of [...positions].sort((a,b)=>a-b)){
+    let u=wrap(x+offset);const quarter=Math.round(u*4)/4;if(Math.abs(u-quarter)<1e-13)u=quarter===1?0:quarter;
+    const jump=(u===0&&(weights[2]>0||weights[3]>0))||(u===.5&&weights[2]>0);
+    if(jump){if(x>0)points.push({x,y:valueAt(weights,u,-1)});if(x<cycles)points.push({x,y:valueAt(weights,u,1)});}
+    else points.push({x,y:valueAt(weights,u)});
+  }
+  return points;
+}
+
+export function coefficients(target,h){
+  const {weights:w}=validateTarget(target);
+  if(!Number.isInteger(h)||h<1||h>32767)throw Error('Projection requires a positive finite harmonic count.');
+  const sin=Array.from({length:h},(_,i)=>{
+    const k=i+1,odd=k%2;
+    return w[0]*(k===1?1:0)+w[1]*(odd?8/Math.PI**2*(k%4===1?1:-1)/(k*k):0)+w[2]*(odd?4/(Math.PI*k):0)+w[3]*2/(Math.PI*k);
+  });
+  return {sin,cos:Array(h).fill(0)};
+}
+export function nyquistHarmonics(base,sampleRate=48000){
+  if(!Number.isFinite(base)||base<=0||!Number.isFinite(sampleRate)||sampleRate<=2*base)throw Error('The fundamental must be strictly below Nyquist.');
+  return Math.ceil(sampleRate/(2*base))-1;
+}
+export function projectedSample(target,theta,h){
+  const {sin}=coefficients(target,h);let value=0;for(let k=1;k<=h;k++)value+=sin[k-1]*Math.sin(k*theta);return value;
+}
+export function projectedCycle(target,n=256,h=127,phase=0){
+  const {sin}=coefficients(target,h);if(!Number.isInteger(n)||n<2||n>65536||!Number.isFinite(phase))throw Error('Invalid projected display size or phase.');
+  return Array.from({length:n},(_,i)=>{let value=0;const theta=TAU*i/n+phase;for(let k=1;k<=h;k++)value+=sin[k-1]*Math.sin(k*theta);return value;});
+}
+export function idealEnergy(target){const {weights}=validateTarget(target);let energy=0;for(let i=0;i<4;i++)for(let j=0;j<4;j++)energy+=weights[i]*weights[j]*GRAM[i][j];return energy;}
+export function projectionInfo(target,base,sampleRate=48000){
+  const bands=nyquistHarmonics(base,sampleRate),series=coefficients(target,bands),fullEnergy=idealEnergy(target),projectedEnergy=series.sin.reduce((sum,x)=>sum+x*x,0)/2;
+  return {bands,sampleRate,base,fullEnergy,projectedEnergy,omittedEnergy:Math.max(0,fullEnergy-projectedEnergy),retainedEnergy:Math.min(1,projectedEnergy/fullEnergy)};
+}
+export function scheduleCell(cells,config,keys){
+  const byId=new Map(cells.map(c=>[c.id,c])),anchors=new Set(config.anchors.map(a=>a.slot));
+  return Array.from({length:1024},(_,id)=>{const cell=byId.get(id);return {id,visits:cell?.target_key===keys[id%32]?cell.visits:0,anchor:anchors.has(id%32)?0:1,blocked:Number(cell?.failed_until)>Date.now()};})
+    .filter(c=>!c.blocked).sort((a,b)=>a.visits-b.visits||a.anchor-b.anchor||(a.id%32)-(b.id%32)||a.id-b.id)[0]?.id??null;
+}

@@ -149,7 +149,6 @@ namespace DexFragglerTray
                 string command = CommandLine(pid).Replace('/', '\\');
                 bool absoluteScript = command.IndexOf(script, StringComparison.OrdinalIgnoreCase) >= 0;
                 double started = Data.Timestamp(status, "processStartTime");
-                if (started == 0) started = Data.Timestamp(status, "startedAt");
                 bool exactStart = started > 0 && Math.Abs(Start(process) - started) <= 2000;
                 bool relativeScript = command.IndexOf("runner\\background.mjs", StringComparison.OrdinalIgnoreCase) >= 0;
                 // An absolute script establishes project ownership. Relative launchers additionally
@@ -170,7 +169,6 @@ namespace DexFragglerTray
                 string expected = Path.Combine(root, "native", "bin", "DexfragglerReference.exe");
                 if (process.HasExited || !Data.SamePath(process.MainModule.FileName, expected) || ParentPid(pid) != worker.Id) { process.Dispose(); return null; }
                 double started = Data.Timestamp(status, "nativeProcessStartTime");
-                if (started == 0) started = Data.Timestamp(status, "nativeStartedAt");
                 if (started > 0 && Math.Abs(Start(process) - started) > 2000) { process.Dispose(); return null; }
                 return process;
             }
@@ -242,6 +240,74 @@ namespace DexFragglerTray
         }
     }
 
+    internal static class TableExport
+    {
+        private const string TargetVersion = "ideal-waveform-v1";
+        private static readonly string[] Shapes = { "sine", "triangle", "square", "saw" };
+        private static Dictionary<string, object> Object(object value)
+        {
+            Dictionary<string, object> result = value as Dictionary<string, object>;
+            if (result == null) throw new FormatException();
+            return result;
+        }
+        private static object Field(Dictionary<string, object> value, string key)
+        {
+            object result;
+            if (!value.TryGetValue(key, out result)) throw new FormatException();
+            return result;
+        }
+        private static object[] Array(object value)
+        {
+            object[] result = value as object[];
+            if (result == null) throw new FormatException();
+            return result;
+        }
+        private static double Number(object value)
+        {
+            if (!(value is int || value is long || value is double || value is decimal)) throw new FormatException();
+            double result = Convert.ToDouble(value);
+            if (Double.IsNaN(result) || Double.IsInfinity(result)) throw new FormatException();
+            return result;
+        }
+        private static void Keys(Dictionary<string, object> value, params string[] keys)
+        {
+            if (value.Count != keys.Length || keys.Any(key => !value.ContainsKey(key))) throw new FormatException();
+        }
+        public static void Validate(object value)
+        {
+            Dictionary<string, object> table = Object(value);
+            if (!System.Object.Equals(Field(table, "format"), "dexfraggler-table") || Number(Field(table, "version")) != 4
+                || !System.Object.Equals(Field(table, "targetVersion"), TargetVersion)) throw new FormatException();
+            Dictionary<string, object> config = Object(Field(table, "config"));
+            Keys(config, "allowDetune", "anchors");
+            if (!(Field(config, "allowDetune") is bool)) throw new FormatException();
+            object[] anchors = Array(Field(config, "anchors"));
+            if (anchors.Length < 1 || anchors.Length > 32) throw new FormatException();
+            double previous = -1;
+            foreach (object item in anchors)
+            {
+                Dictionary<string, object> anchor = Object(item); Keys(anchor, "slot", "shape");
+                double slot = Number(Field(anchor, "slot"));
+                if (slot < 0 || slot > 31 || slot != Math.Floor(slot) || slot <= previous || !Shapes.Contains(Field(anchor, "shape") as string)) throw new FormatException();
+                previous = slot;
+            }
+            object[] targets = Array(Field(table, "targets"));
+            if (targets.Length != 32) throw new FormatException();
+            foreach (object item in targets)
+            {
+                Dictionary<string, object> target = Object(item); Keys(target, "kind", "weights");
+                if (!System.Object.Equals(Field(target, "kind"), TargetVersion)) throw new FormatException();
+                object[] weights = Array(Field(target, "weights"));
+                if (weights.Length != 4) throw new FormatException();
+                double sum = 0;
+                foreach (object weight in weights) { double n = Number(weight); if (n < 0) throw new FormatException(); sum += n; }
+                if (Math.Abs(sum - 1) > 1e-12) throw new FormatException();
+            }
+            object[] cells = Array(Field(table, "cells"));
+            if (cells.Length > 1024) throw new FormatException();
+        }
+    }
+
     internal sealed class Remote
     {
         private readonly string root;
@@ -292,14 +358,9 @@ namespace DexFragglerTray
                 if (text.Length > 32 * 1024 * 1024) throw new InvalidOperationException("The table response exceeds 32 MB.");
                 try
                 {
-                    Dictionary<string, object> table = Data.Serializer().DeserializeObject(text) as Dictionary<string, object>;
-                    object rawCells;
-                    double version = Data.Number(table, "version");
-                    if (table == null || Data.Text(table, "format") != "dexfraggler-table" || (version != 2 && version != 3) || !table.TryGetValue("cells", out rawCells)) throw new FormatException();
-                    object[] cells = rawCells as object[];
-                    if (cells == null || cells.Length < 1 || cells.Length > 1024) throw new FormatException();
+                    TableExport.Validate(Data.Serializer().DeserializeObject(text));
                 }
-                catch { throw new InvalidOperationException("The site did not return a JSON table. No export was saved."); }
+                catch { throw new InvalidOperationException("The site did not return a version 4 formula table. No export was saved."); }
                 return text;
             }
         }

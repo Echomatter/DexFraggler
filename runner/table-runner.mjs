@@ -1,3 +1,4 @@
+import {TARGET_VERSION,METRIC_VERSION,targetKey} from '../public/targets.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -24,10 +25,10 @@ export async function atomicJson(filename,value){
 export function restoreState(core,target,key,config,algorithm,cell,cached){
   const current=cell&&(cell.current??cell.target_key===key);
   const legal=p=>{try{return core.validatePatch(p).algorithm===algorithm}catch{return false}};
-  const seeds=[cell?.patch,cell?.reference?.patch,cell?.state?.elites?.[0]?.patch,...(cell?.seeds??[])].filter(legal);
-  let state=cached?.model===core.MODEL&&patchKey(cached.shape)===key?cached:core.initialState(target,seeds.map(patch=>({patch})),config.harmonics,algorithm);
+  const seeds=[cell?.patch,cell?.reference?.patch,cell?.state?.elites?.[0]?.patch].filter(legal);
+  let state=cached?.model===core.MODEL&&targetKey(cached.shape)===key?cached:core.initialState(target,[],127,algorithm);
   state.allowDetune=config.allowDetune;
-  state.nativeSeeds=seeds.slice(0,32);
+  for(const patch of seeds)if(!state.elites.some(e=>patchKey(e.patch)===patchKey(patch)))addModelCandidate(state,core.evaluate(patch,target,127));
   if(current){
     state.evaluations=Math.max(state.evaluations,Number(cell.evaluations)||0,Number(cell.state?.evaluations)||0);
     const champion=cell.state?.model===core.MODEL?cell.state.elites?.[0]:null;
@@ -38,10 +39,6 @@ export function restoreState(core,target,key,config,algorithm,cell,cached){
       state.elites.sort((a,b)=>a.loss-b.loss);state.elites=state.elites.slice(0,16);
     }
   }
-  // Imports arrive independently of optimizer memory. Evaluate fresh explicit
-  // seeds even when this row already has a cached optimizer; never let the next
-  // checkpoint erase a newly imported patch without considering it.
-  for(const patch of (cell?.seeds??[]).filter(legal))if(!state.elites.some(e=>patchKey(e.patch)===patchKey(patch)))addModelCandidate(state,core.evaluate(patch,target,config.harmonics));
   return state;
 }
 
@@ -55,7 +52,8 @@ export function addModelCandidate(state,item){
   return item.loss<previous;
 }
 
-function completeReference(r){return r?.engine==='Dexed Mark I / native'&&finite(r.loss)&&finite(r.score)&&Array.isArray(r.notes)&&r.notes.length===3&&r.notes.every(n=>Array.isArray(n.wave)&&Array.isArray(n.target))}
+function validReference(r){return r?.engine==='Dexed Mark I / native'&&r.metricVersion===METRIC_VERSION&&finite(r.loss)&&finite(r.score)&&Array.isArray(r.notes)&&r.notes.length===3}
+function completeReference(r){return validReference(r)&&r.notes.every(n=>Array.isArray(n.wave)&&Array.isArray(n.target))}
 
 /** One asynchronous compute lane; no worker is attached to an individual cell.
  * The cloud selects the least-visited focus. Every native capture is compared
@@ -130,18 +128,13 @@ export async function runTableRunner(options={}){
     const rowStart=(job.algorithm-1)*32,focus=job.id%32,signature=JSON.stringify([job.generation,job.targetKeys]);
     let row=rows.get(job.algorithm);
     if(row?.signature!==signature){row={signature,generation:job.generation,states:new Map(),best:new Map(),checked:new Set(),count:0};rows.set(job.algorithm,row)}
-    const cells=new Map((job.cells??[]).map(c=>[Number(c.id),c])),dirty=new Set(),consumed=new Map(),pendingSeeds=new Map();
-    for(const cell of cells.values())for(const patch of cell.seeds??[]){
-      const key=patchKey(patch);if(!pendingSeeds.has(key))pendingSeeds.set(key,[]);
-      pendingSeeds.get(key).push({slot:cell.id%32,patch});
-    }
-    const consume=key=>{for(const {slot,patch} of pendingSeeds.get(key)??[]){if(!consumed.has(slot))consumed.set(slot,new Map());consumed.get(slot).set(key,patch);dirty.add(slot)}};
+    const cells=new Map((job.cells??[]).map(c=>[Number(c.id),c])),dirty=new Set();
     let didWork=false;
     for(let slot=0;slot<32;slot++){
       const id=rowStart+slot,cell=cells.get(id),key=job.targetKeys[slot];
       row.states.set(slot,restoreState(core,job.targets[slot],key,job.config,job.algorithm,cell,row.states.get(slot)));
-      const current=cell&&(cell.current??cell.target_key===key),remote=current&&completeReference(cell.reference)?cell.reference:null;
-      if(remote&&(!row.best.get(slot)||remote.loss<row.best.get(slot).loss))row.best.set(slot,remote);
+      const current=cell&&(cell.current??cell.target_key===key),remote=current&&validReference(cell.reference)?cell.reference:null;
+      if(remote&&(!row.best.get(slot)||remote.loss<=row.best.get(slot).loss))row.best.set(slot,remote);
       if(slot%8===7)await sleep(0);
     }
     // Keep only search memory for the present table generation.
@@ -153,10 +146,6 @@ export async function runTableRunner(options={}){
     }
     const seeds=[];
     const add=p=>{if(p?.algorithm===job.algorithm&&!seeds.some(x=>patchKey(x)===patchKey(p)))seeds.push(p)};
-    // Imports have priority over general proposals. A partially processed row
-    // acknowledges only seeds whose native capture was actually compared.
-    for(const patch of cells.get(job.id)?.seeds??[])add(patch);
-    for(const cell of cells.values())for(const patch of cell.seeds??[])add(patch);
     add(state.elites[0]?.patch);add(row.best.get(focus)?.patch);add(cells.get(job.id)?.reference?.patch);add(cells.get(job.id)?.patch);
     const ranked=Array.from({length:32},(_,slot)=>slot).sort((a,b)=>(row.best.get(b)?.loss??2)-(row.best.get(a)?.loss??2));
     for(const slot of [...job.config.anchors.map(a=>a.slot),...ranked]){add(row.states.get(slot)?.elites[0]?.patch);add(row.best.get(slot)?.patch);if(seeds.length>=10)break}
@@ -177,17 +166,25 @@ export async function runTableRunner(options={}){
         p=native.nativeProposal(base,row.count++,job.config.allowDetune);
       }
       const key=patchKey(p);
-      if(row.checked.has(key)&&row.best.get(focus)){consume(key);if(++duplicateAttempts>128)break;continue}
+      if(row.checked.has(key)&&row.best.get(focus)){if(++duplicateAttempts>128)break;continue}
       duplicateAttempts=0;
       // scoreMany reuses its cached capture/prepared pitch transforms between
       // chunks. Yield after eight targets so even display-wave generation for
       // a full row cannot starve tray pause/priority polling.
       const results=[];
       for(let start=0;start<32;start+=8){
-        results.push(...await reference.scoreMany(p,job.targets.slice(start,start+8),job.config.harmonics));
+        results.push(...await reference.scoreMany(p,job.targets.slice(start,start+8),{preview:false}));
         assertLease();await sleep(0);
       }
       if(!Array.isArray(results)||results.length!==32)throw Error('Native row scoring returned an incomplete row.');
+      // Display samples are only needed for new champions. Scalar comparisons
+      // reuse the full capture and exact objective for every other candidate.
+      const improved=results.map((candidate,slot)=>!row.best.get(slot)||candidate.loss<row.best.get(slot).loss?slot:-1).filter(slot=>slot>=0);
+      for(let start=0;start<improved.length;start+=8){
+        const slots=improved.slice(start,start+8),previews=await reference.scoreMany(p,slots.map(slot=>job.targets[slot]));
+        slots.forEach((slot,i)=>{if(!completeReference(previews[i])||Math.abs(previews[i].loss-results[slot].loss)>1e-12)throw Error('Preview and native score disagree.');results[slot]=previews[i]});
+        assertLease();await sleep(0);
+      }
       assertLease();captures++;didWork=true;
       // One model render also serves all targets; do not render the same patch
       // 32 times merely because the comparison target changes.
@@ -195,17 +192,23 @@ export async function runTableRunner(options={}){
       for(let slot=0;slot<32;slot++){
         const candidate=results[slot],current=row.best.get(slot);
         if(!current||candidate.loss<current.loss){row.best.set(slot,candidate);changedAt.set(rowStart+slot,Date.now());dirty.add(slot)}
-        addModelCandidate(row.states.get(slot),{patch:core.clone(p),...core.analyze(wave,job.targets[slot],job.config.harmonics)});
+        addModelCandidate(row.states.get(slot),{patch:core.clone(p),...core.analyze(wave,job.targets[slot],127)});
         totalEvaluations++;dirty.add(slot);
         if(slot%8===7)await sleep(0);
       }
-      consume(key);row.checked.add(key);while(row.checked.size>384)row.checked.delete(row.checked.values().next().value);
+      row.checked.add(key);while(row.checked.size>384)row.checked.delete(row.checked.values().next().value);
       await publish();await sleep(0);
       if(captures>=24)break;
     }
     assertLease();
-    const updates=[...dirty].filter(slot=>completeReference(row.best.get(slot))).map(slot=>({id:rowStart+slot,state:row.states.get(slot),reference:row.best.get(slot),visited:slot===focus&&didWork,consumedSeeds:[...(consumed.get(slot)?.values()??[])].slice(0,64)}));
-    if(!updates.some(c=>c.id===job.id)&&completeReference(row.best.get(focus)))updates.push({id:job.id,state:row.states.get(focus),reference:row.best.get(focus),visited:didWork,consumedSeeds:[]} );
+    const update=slot=>{
+      const cell=cells.get(rowStart+slot),best=row.best.get(slot),remote=cell?.current?cell.reference:null;
+      const unchanged=validReference(remote)&&remote.loss===best.loss&&patchKey(remote.patch)===patchKey(best.patch);
+      if(!unchanged&&!completeReference(best))throw Error('A new native champion needs its complete measurement.');
+      return {id:rowStart+slot,state:row.states.get(slot),reference:unchanged?null:best,visited:slot===focus&&didWork};
+    };
+    const updates=[...dirty].filter(slot=>validReference(row.best.get(slot))).map(update);
+    if(!updates.some(c=>c.id===job.id)&&validReference(row.best.get(focus)))updates.push(update(focus));
     if(!updates.length){
       if(localPaused||stopping){await request({action:'release',worker,id:job.id,generation:job.generation});return}
       throw Error('No complete native cell result was available to save.');
@@ -222,7 +225,7 @@ export async function runTableRunner(options={}){
       await heartbeat();
       if(localPaused){phase='Paused on this computer';await responsiveSleep(500);continue}
       const worker=WORKER+' '+randomUUID();
-      const response=await request({action:'claim_row',worker,workerName:WORKER,status:compactStatus()});
+      const response=await request({action:'claim_row',worker,model:core.MODEL,targetVersion:TARGET_VERSION,metricVersion:METRIC_VERSION,status:compactStatus()});
       const job=response.job;cloudRunning=response.running??Boolean(job);
       if(!job){phase=cloudRunning?'Waiting for table':'Table paused';await responsiveSleep(1500);continue}
       cloudRunning=true;active={job,worker,lastRenew:Date.now(),invalid:false};
