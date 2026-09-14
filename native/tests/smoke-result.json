@@ -1,8 +1,9 @@
 {
   "ok": true,
-  "executableSha256": "d67045da4b058bb1c7ff62cc347e5cfbd3ea67e260475bb10a7a00cc04d2b5e2",
+  "executableSha256": "e1e040b671a9a9031cab0ec804694ab19ec196a7321d27092a437db7f72717ad",
+  "sourceTreeCompared": false,
   "checks": [
-    "fresh current-source build",
+    "native executable protocol",
     "three 4096-sample arrays",
     "110/220/440Hz tuning",
     "finite bounded 16-bit PCM",
@@ -13,7 +14,7 @@
     "process survives invalid requests",
     "silent patch",
     "clean stdout JSON and empty stderr",
-    "original source unchanged and copies byte-exact"
+    "vendored source hashes match manifest"
   ],
   "measurements": [
     {

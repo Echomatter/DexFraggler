@@ -58,7 +58,7 @@ function samplingFor(note,n){
     for(let k=1;k<=2*bands;k++){
       const next=s*dc+c*ds;c=c*dc-s*ds;s=next;
       sinSum[k]+=s;cosSum[k]+=c;
-      if(k<=bands){const offset=(i*bands+k-1)*2;basis[offset]=s;basis[offset+1]=c;}
+      if(k<=bands){const offset=(k-1)*2*n+i;basis[offset]=s;basis[offset+n]=c;}
     }
   }
   return remember(basisCache,key,{base,bands,step,basis,sinSum,cosSum},8);
@@ -68,7 +68,16 @@ export function prepareAudio(audio,note){
   const n=audio.length,mean=audio.reduce((sum,x)=>sum+x,0)/n,centered=Float64Array.from(audio,x=>x-mean),energy=centered.reduce((sum,x)=>sum+x*x,0);
   if(!Number.isFinite(energy))throw Error('Audio must contain finite samples.');
   const sampling=samplingFor(note,n),moments=new Float64Array(sampling.bands*2);
-  for(let i=0;i<n;i++){const offset=i*moments.length,value=centered[i];for(let j=0;j<moments.length;j++)moments[j]+=value*sampling.basis[offset+j];}
+  // Store one contiguous vector per basis function. Accumulate each dot product
+  // in a scalar instead of reading/writing the moments array for every sample.
+  // Sample order is unchanged, so this does not change floating-point sums.
+  const basis=sampling.basis;let j=0;
+  for(;j+3<moments.length;j+=4){
+    const a=j*n,b=a+n,c=b+n,d=c+n;let sa=0,sb=0,sc=0,sd=0;
+    for(let i=0;i<n;i++){const value=centered[i];sa+=value*basis[a+i];sb+=value*basis[b+i];sc+=value*basis[c+i];sd+=value*basis[d+i];}
+    moments[j]=sa;moments[j+1]=sb;moments[j+2]=sc;moments[j+3]=sd;
+  }
+  for(;j<moments.length;j++){const offset=j*n;let sum=0;for(let i=0;i<n;i++)sum+=centered[i]*basis[offset+i];moments[j]=sum;}
   diagnostics.preparedAudio++;
   return {audio,n,note,mean,centered,energy,moments,...sampling};
 }
@@ -109,15 +118,15 @@ export function scorePrepared(prepared,target,options={}){
   const audioNorm=Math.sqrt(energy),dotC=new Float64Array(h+1),dotS=new Float64Array(h+1);
   for(let k=1;k<=h;k++){dotC[k]=plan.b[k-1]*moments[(k-1)*2]/audioNorm;dotS[k]=plan.b[k-1]*moments[(k-1)*2+1]/audioNorm;}
   function at(phase,derivatives=false){
-    const ds=Math.sin(phase),dc=Math.cos(phase);let s=0,c=1,dot=0,e=plan.energyC[0],sum=0,dp=0,dpp=0,ep=0,epp=0;
+    const ds=Math.sin(phase),dc=Math.cos(phase);let s=0,c=1,dot=0,e=plan.energyC[0],dp=0,dpp=0,ep=0,epp=0;
     for(let k=1;k<=2*h;k++){
       const next=s*dc+c*ds;c=c*dc-s*ds;s=next;
       const ec=plan.energyC[k],es=plan.energyS[k],ev=ec*c+es*s;e+=ev;
       if(derivatives){ep+=k*(-ec*s+es*c);epp-=k*k*ev;}
-      if(k<=h){const v=dotC[k]*c+dotS[k]*s;dot+=v;sum+=plan.meanC[k]*c+plan.meanS[k]*s;
+      if(k<=h){const v=dotC[k]*c+dotS[k]*s;dot+=v;
         if(derivatives){dp+=k*(-dotC[k]*s+dotS[k]*c);dpp-=k*k*v;}}
     }
-    diagnostics.phaseEvaluations++;return {phase,score:dot/Math.sqrt(e),dot,energy:e,sum,dp,dpp,ep,epp};
+    diagnostics.phaseEvaluations++;return {phase,score:dot/Math.sqrt(e),dot,energy:e,dp,dpp,ep,epp};
   }
   const dotBounds=bounds(dotC,dotS),[d0,d1,d2]=dotBounds,[,e1,e2]=plan.energyBounds,emin=plan.energyMinimum;
   // Global bound on |d²/dphi² (dot / sqrt(target energy))|.
@@ -126,8 +135,25 @@ export function scorePrepared(prepared,target,options={}){
   let best={score:-Infinity,phase:0};
   for(let i=0;i<size;i++){scores[i]=dotGrid[i]/Math.sqrt(plan.energyGrid[i]);if(scores[i]>best.score)best={score:scores[i],phase:i*delta};}
   best=at(best.phase);
+  function polish(){
+    for(let i=0;i<8;i++){
+      const value=at(best.phase,true),f=2*value.dp*value.energy-value.dot*value.ep;
+      const derivative=2*value.dpp*value.energy+value.dp*value.ep-value.dot*value.epp;
+      if(!Number.isFinite(derivative)||derivative>=0)break;
+      const change=f/derivative;if(!Number.isFinite(change)||Math.abs(change)>delta)break;
+      const candidate=at((best.phase-change+TAU)%TAU);
+      if(candidate.score+1e-14<best.score)break;best=candidate;if(Math.abs(change)<1e-13)break;
+    }
+  }
   const heap=new MaxHeap();
-  function add(a,b,fa,fb){const upper=Math.max(fa,fb)+curvature*(b-a)**2/8+ROUNDING_ALLOWANCE;if(upper>best.score+SCORE_TOLERANCE)heap.push({a,b,fa,fb,upper});}
+  function add(a,b,fa,fb){
+    // With |f''| <= M, f(a+t*d) <= fa+(fb-fa)*t+M*d²*t*(1-t)/2.
+    // Maximize this entire parabola, preserving the endpoint slope. The former
+    // max(fa,fb)+M*d²/8 bound drops that slope and overestimates monotone spans.
+    const bend=curvature*(b-a)**2/2,rise=bend-Math.abs(fb-fa);
+    const upper=Math.max(fa,fb)+(rise>0?rise*rise/(4*bend):0)+ROUNDING_ALLOWANCE;
+    if(upper>best.score+SCORE_TOLERANCE)heap.push({a,b,fa,fb,upper});
+  }
   for(let i=0;i<size;i++)add(i*delta,(i+1)*delta,scores[i],scores[(i+1)%size]);
   while(heap.top&&heap.top.upper>best.score+SCORE_TOLERANCE){
     const interval=heap.pop(),middle=(interval.a+interval.b)/2,value=at(middle);diagnostics.subdivisions++;
@@ -135,18 +161,14 @@ export function scorePrepared(prepared,target,options={}){
     add(interval.a,middle,interval.fa,value.score);add(middle,interval.b,value.score,interval.fb);
   }
   // Newton polishing improves phase precision after the global score bound.
-  for(let i=0;i<8;i++){
-    const value=at(best.phase,true),f=2*value.dp*value.energy-value.dot*value.ep;
-    const derivative=2*value.dpp*value.energy+value.dp*value.ep-value.dot*value.epp;
-    if(!Number.isFinite(derivative)||derivative>=0)break;
-    const change=f/derivative;if(!Number.isFinite(change)||Math.abs(change)>delta)break;
-    const candidate=at((best.phase-change+TAU)%TAU);
-    if(candidate.score+1e-14<best.score)break;best=candidate;if(Math.abs(change)<1e-13)break;
-  }
+  polish();
   const phase=(best.phase+TAU)%TAU,score=Math.max(0,Math.min(1,best.score));
   const result={...metadata,score,error:Math.sqrt(Math.max(0,1-score*score)),phase,phaseScoreTolerance:SCORE_TOLERANCE};
   if(!preview)return result;
-  const scale=best.dot/audioNorm,targetMean=best.sum/n,viewSpan=Math.min(n-1,2*SAMPLE_RATE/base);
+  // Target mean only affects display; compute it once for the winning phase.
+  const ds=Math.sin(phase),dc=Math.cos(phase);let sum=0,s=0,c=1;
+  for(let k=1;k<=h;k++){const next=s*dc+c*ds;c=c*dc-s*ds;s=next;sum+=plan.meanC[k]*c+plan.meanS[k]*s;}
+  const scale=best.dot/audioNorm,targetMean=sum/n,viewSpan=Math.min(n-1,2*SAMPLE_RATE/base);
   result.wave=[];result.target=[];result.idealTarget=[];
   for(let i=0;i<512;i++){
     const position=i/511*viewSpan,idx=Math.floor(position),f=position-idx,theta=position*step+phase;

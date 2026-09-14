@@ -1,0 +1,35 @@
+name: Calculation models
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  web-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+  windows-reference:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build native reference from source
+        run: |
+          cmake -S native -B native/build -A x64
+          cmake --build native/build --config Release --parallel 2
+          ctest --test-dir native/build -C Release --output-on-failure
+          python native/tests/smoke.py
+      - name: Verify models, scores, retention and codecs
+        shell: pwsh
+        run: |
+          $env:DEXFRAGGLER_NATIVE_EXE = Join-Path $PWD 'native/build/Release/DexfragglerReference.exe'
+          node --test tests/*.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/model-lab.mjs score --native --out native-example.json

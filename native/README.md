@@ -56,3 +56,14 @@ feedback paths4/6, tuning, quantization bounds, deterministic concurrent renders
 block handling, and shared LFO behavior. The Python protocol test sends multiple
 requests through one process, verifies expected sine frequencies/amplitude, and
 records compact measurements in `tests/smoke-result.json`.
+
+The smoke test validates the vendored files against the manifest without needing
+the original author's checkout. Add `--source-root C:\path\to\FM1_WaveFinder`
+to compare against an independent source tree, or `--executable C:\path\to\renderer.exe`
+to test another build. The report identifies the executable actually tested.
+
+From the repository root, set `DEXFRAGGLER_NATIVE_EXE` to the absolute path of
+`native/build/Release/DexfragglerReference.exe` before running the JavaScript
+tests or calculation lab to use your fresh build. Otherwise Windows uses the
+checked-in `native/bin/DexfragglerReference.exe`. The reference client records
+the selected executable's SHA-256 in every measurement.

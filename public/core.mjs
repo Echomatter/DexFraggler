@@ -130,8 +130,44 @@ export function targetWave(target,harmonics=MODEL_HARMONICS,n=1024,base=187.5,ph
   const {sin,cos}=coefficients(target,bands);
   return Float64Array.from({length:n},(_,i)=>{let value=0;const theta=TAU*base*i/48000+phase;for(let k=1;k<=bands;k++){value+=sin[k-1]*Math.sin(k*theta);if(cos[k-1])value+=cos[k-1]*Math.cos(k*theta)}return value});
 }
-function targetInfo(target,h,n){const key=[targetKey(requireTarget(target)),h,n].join(':');if(targetCache.size>128)targetCache.clear();if(!targetCache.has(key)){const wave=targetWave(target,h,n),re=Float64Array.from(wave),im=new Float64Array(n);const energy=wave.reduce((a,b)=>a+b*b,0);fft(re,im);targetCache.set(key,{wave,re,im,energy})}return targetCache.get(key)}
-export function analyze(wave,target,h=MODEL_HARMONICS){const n=wave.length,t=targetInfo(target,h,n);let mean=wave.reduce((a,b)=>a+b,0)/n;const centered=Float64Array.from(wave,x=>x-mean);const energy=centered.reduce((a,b)=>a+b*b,0);if(energy<1e-16)return {score:0,error:1,spectralError:1,loss:1,shift:0,scale:0};const re=Float64Array.from(centered),im=new Float64Array(n);fft(re,im);const cr=new Float64Array(n),ci=new Float64Array(n);let spectral=0;for(let k=0;k<n;k++){cr[k]=re[k]*t.re[k]+im[k]*t.im[k];ci[k]=im[k]*t.re[k]-re[k]*t.im[k];spectral+=(Math.hypot(re[k],im[k])/Math.sqrt(energy)-Math.hypot(t.re[k],t.im[k])/Math.sqrt(t.energy))**2}fft(cr,ci,true);let shift=0,corr=-Infinity;for(let i=0;i<n;i++)if(cr[i]>corr){corr=cr[i];shift=i}const score=clamp(corr/Math.sqrt(energy*t.energy),0,1);const error=Math.sqrt(Math.max(0,1-score*score));return {score,error,spectralError:Math.sqrt(spectral/n),loss:.85*error*error+.15*spectral/n,shift,scale:corr/energy}}
+function targetInfo(target,h,n){
+  const key=[targetKey(requireTarget(target)),h,n].join(':');
+  if(!targetCache.has(key)){
+    const wave=targetWave(target,h,n),re=Float64Array.from(wave),im=new Float64Array(n);
+    const energy=wave.reduce((a,b)=>a+b*b,0);fft(re,im);
+    const magnitude=Float64Array.from(re,(x,k)=>Math.hypot(x,im[k])/Math.sqrt(energy));
+    if(targetCache.size>=128)targetCache.delete(targetCache.keys().next().value);
+    targetCache.set(key,{wave,re,im,energy,magnitude});
+  }
+  return targetCache.get(key);
+}
+/** Prepare the exact model objective once for any number of targets. The
+ * returned arrays belong to this context; callers must treat them as read-only.
+ * This retains every FFT bin, sample, and the existing 127-harmonic objective. */
+export function prepareModelWave(wave){
+  const n=wave.length,mean=wave.reduce((a,b)=>a+b,0)/n;
+  const centered=Float64Array.from(wave,x=>x-mean),energy=centered.reduce((a,b)=>a+b*b,0);
+  const re=Float64Array.from(centered),im=new Float64Array(n),magnitude=new Float64Array(n);
+  if(energy>=1e-16){fft(re,im);for(let k=0;k<n;k++)magnitude[k]=Math.hypot(re[k],im[k])/Math.sqrt(energy)}
+  return {n,energy,re,im,magnitude};
+}
+export function analyzePreparedModel(prepared,target,h=MODEL_HARMONICS){
+  const {n,energy,re,im,magnitude}=prepared,t=targetInfo(target,h,n);
+  if(energy<1e-16)return {score:0,error:1,spectralError:1,loss:1,shift:0,scale:0};
+  const cr=new Float64Array(n),ci=new Float64Array(n);let spectral=0;
+  for(let k=0;k<n;k++){
+    cr[k]=re[k]*t.re[k]+im[k]*t.im[k];ci[k]=im[k]*t.re[k]-re[k]*t.im[k];
+    spectral+=(magnitude[k]-t.magnitude[k])**2;
+  }
+  fft(cr,ci,true);let shift=0,corr=-Infinity;
+  for(let i=0;i<n;i++)if(cr[i]>corr){corr=cr[i];shift=i}
+  const score=clamp(corr/Math.sqrt(energy*t.energy),0,1),error=Math.sqrt(Math.max(0,1-score*score));
+  return {score,error,spectralError:Math.sqrt(spectral/n),loss:.85*error*error+.15*spectral/n,shift,scale:corr/energy};
+}
+export function analyze(wave,target,h=MODEL_HARMONICS){return analyzePreparedModel(prepareModelWave(wave),target,h)}
+export function analyzeMany(wave,targets,h=MODEL_HARMONICS){
+  const prepared=prepareModelWave(wave);return targets.map(target=>analyzePreparedModel(prepared,target,h));
+}
 export function evaluate(p,target,h=MODEL_HARMONICS){return {patch:clone(p),...analyze(render(p),target,h)}}
 export function display(p,target,h=MODEL_HARMONICS){const w=render(p),m=analyze(w,target,h);const reference=targetInfo(target,h,w.length).wave,re=new Float64Array(w),im=new Float64Array(w.length);fft(re,im);let e=w.reduce((s,x)=>s+x*x,0);return {...m,wave:Array.from({length:512},(_,i)=>w[(i+m.shift)%w.length]*m.scale),target:Array.from(reference.slice(0,512)),harmonics:Array.from({length:32},(_,i)=>Math.hypot(re[4*(i+1)],im[4*(i+1)])/Math.sqrt(Math.max(e,1e-20)*w.length/2))}}
 function random(state){let x=state.rng|0;x^=x<<13;x^=x>>>17;x^=x<<5;state.rng=x>>>0;return state.rng/4294967296}

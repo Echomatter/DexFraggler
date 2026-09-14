@@ -1,12 +1,17 @@
 """End-to-end protocol/audio checks. Prints a compact report, never PCM arrays."""
 import hashlib
+import argparse
 import json
 import math
 from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-EXE = ROOT / "build/Release/DexfragglerReference.exe"
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--executable", type=Path, default=ROOT / "build/Release/DexfragglerReference.exe")
+parser.add_argument("--source-root", type=Path, help="Optionally compare to an independent original source tree.")
+args = parser.parse_args()
+EXE = args.executable.resolve()
 
 
 def init_patch():
@@ -83,19 +88,20 @@ assert process.wait(timeout=10) == 0
 assert process.stderr.read() == "", "Renderer wrote diagnostics during the protocol."
 
 manifest = json.loads((ROOT / "source-provenance.json").read_text(encoding="utf-8-sig"))
-source = Path(manifest["sourceRoot"])
 for item in manifest["files"]:
     copied = ROOT / item["path"]
-    original = source / Path(item["path"]).relative_to("vendor")
     assert hashlib.sha256(copied.read_bytes()).hexdigest() == item["sha256"]
-    assert copied.read_bytes() == original.read_bytes(), f"Copy differs: {item['path']}"
+    if args.source_root is not None:
+        original = args.source_root / Path(item["path"]).relative_to("vendor")
+        assert copied.read_bytes() == original.read_bytes(), f"Copy differs: {item['path']}"
 report = {
     "ok": True,
     "executableSha256": hashlib.sha256(EXE.read_bytes()).hexdigest(),
-    "checks": ["fresh current-source build", "three 4096-sample arrays", "110/220/440Hz tuning",
+    "sourceTreeCompared": args.source_root is not None,
+    "checks": ["native executable protocol", "three 4096-sample arrays", "110/220/440Hz tuning",
                "finite bounded 16-bit PCM", "expected unnormalized carrier amplitude", "deterministic repeated requests",
                "CSV and whitespace input", "malformed/out-of-range input rejected", "process survives invalid requests",
-               "silent patch", "clean stdout JSON and empty stderr", "original source unchanged and copies byte-exact"],
+               "silent patch", "clean stdout JSON and empty stderr", "vendored source hashes match manifest"],
     "measurements": measurements,
 }
 (ROOT / "tests/smoke-result.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

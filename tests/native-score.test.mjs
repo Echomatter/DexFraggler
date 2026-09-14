@@ -4,6 +4,8 @@ import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import readline from 'node:readline';
 import {fileURLToPath} from 'node:url';
+import {createHash} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
 import {blank,clone,sysex} from '../public/core.mjs';
 import {idealTarget} from '../public/targets.mjs';
 import {Reference} from '../runner/reference.mjs';
@@ -60,6 +62,8 @@ test('exact SysEx cache coalesces requests, reuses projections and evicts the le
   ]);
   assert.equal(reference.renders,1);assert.equal(reference.metrics.inflightHits,2);
   assert.equal(reference.metrics.preparedPitches,3);
+  const expectedHash=createHash('sha256').update(await readFile(executablePath)).digest('hex');
+  for(const result of many)assert.equal(result.binarySha256,expectedHash,'Measurement must identify the executable that actually rendered it');
   assert.equal(many[0].score,single.score);assert.equal(many[0].loss,single.loss);
   const compact=await reference.scoreMany(a,targets,{preview:false});
   for(let i=0;i<many.length;i++){

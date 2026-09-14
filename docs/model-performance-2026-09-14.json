@@ -1,0 +1,56 @@
+{
+  "generatedAt": "2026-09-14T21:16:21.430Z",
+  "node": "v24.16.0",
+  "baseline": "cedde2ca3bc9bc847960767965ac1830ccb58f72",
+  "scope": "Model-only timings; live background runner remains active. Median of five alternating-order warm repetitions.",
+  "cells": 1024,
+  "exactWaveforms": 1024,
+  "exactScoreComparisons": 32768,
+  "candidates": 96,
+  "timings": [
+    {
+      "name": "score96RowsOf32Targets",
+      "beforeMs": 1872.4308999999994,
+      "afterMs": 400.9328000000023,
+      "speedup": 4.6701863753726025,
+      "samples": {
+        "before": [
+          1787.7573999999986,
+          2390.7985999999946,
+          2481.586099999993,
+          1846.3219000000026,
+          1872.4308999999994
+        ],
+        "after": [
+          412.16070000000036,
+          410.71860000000015,
+          358.94109999999637,
+          400.9328000000023,
+          354.0852999999988
+        ]
+      }
+    },
+    {
+      "name": "renderAndScore96Rows",
+      "beforeMs": 1894.9180000000051,
+      "afterMs": 477.2430000000022,
+      "speedup": 3.9705516896004682,
+      "samples": {
+        "before": [
+          1843.184000000001,
+          1895.0861000000004,
+          1946.6644000000015,
+          1869.3492000000042,
+          1894.9180000000051
+        ],
+        "after": [
+          467.48169999999664,
+          466.01860000000306,
+          515.1926000000021,
+          477.2430000000022,
+          488.62259999999515
+        ]
+      }
+    }
+  ]
+}

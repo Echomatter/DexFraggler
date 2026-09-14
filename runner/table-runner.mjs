@@ -20,25 +20,31 @@ export async function atomicJson(filename,value){
   finally{await fs.unlink(temp).catch(()=>{})}
 }
 
-/** Keep only legal champion results when constructing fresh optimizer mechanics.
+/** Keep legal candidate results when constructing fresh optimizer mechanics.
  * Existing search counters are retained solely for monotonic checkpointing.
  */
 export function restoreState(core,target,key,config,algorithm,cell,cached){
   const current=cell&&(cell.current??cell.target_key===key);
   const legal=p=>{try{return core.validatePatch(p).algorithm===algorithm}catch{return false}};
-  const seeds=[cell?.patch,cell?.reference?.patch,cell?.state?.elites?.[0]?.patch].filter(legal);
-  let state=cached?.model===core.MODEL&&targetKey(cached.shape)===key?cached:core.initialState(target,[],127,algorithm);
+  const compatible=s=>{try{return s?.model===core.MODEL&&s.algorithm===algorithm&&s.harmonics===127&&targetKey(s.shape)===key}catch{return false}};
+  const saved=Array.isArray(cell?.state?.elites)?cell.state.elites.filter(e=>legal(e?.patch)):[];
+  const seeds=[cell?.patch,cell?.reference?.patch].filter(legal);
+  let state=compatible(cached)?cached:core.initialState(target,[],127,algorithm);
   state.allowDetune=config.allowDetune;
+  // Alternate elites are valuable search starting points, even when they are
+  // not the champion. Reuse scores only for the exact model and target; old
+  // target candidates remain legal proposals and are independently rescored.
+  for(const item of saved){
+    if(current&&compatible(cell.state)&&finite(item.loss)&&item.loss>=0&&item.loss<=5&&finite(item.score)&&item.score>=0&&item.score<=1){
+      const same=state.elites.findIndex(e=>patchKey(e.patch)===patchKey(item.patch));
+      if(same<0)state.elites.push(core.clone(item));
+      else if(item.loss<state.elites[same].loss)state.elites[same]=core.clone(item);
+    }else if(!state.elites.some(e=>patchKey(e.patch)===patchKey(item.patch)))addModelCandidate(state,core.evaluate(item.patch,target,127));
+  }
+  state.elites.sort((a,b)=>a.loss-b.loss);state.elites=state.elites.slice(0,16);
   for(const patch of seeds)if(!state.elites.some(e=>patchKey(e.patch)===patchKey(patch)))addModelCandidate(state,core.evaluate(patch,target,127));
   if(current){
     state.evaluations=Math.max(state.evaluations,Number(cell.evaluations)||0,Number(cell.state?.evaluations)||0);
-    const champion=cell.state?.model===core.MODEL?cell.state.elites?.[0]:null;
-    if(champion&&legal(champion.patch)&&finite(champion.loss)&&finite(champion.score)){
-      const same=state.elites.findIndex(e=>patchKey(e.patch)===patchKey(champion.patch));
-      if(same>=0&&state.elites[same].loss>champion.loss)state.elites.splice(same,1);
-      if(same<0||!state.elites.some(e=>patchKey(e.patch)===patchKey(champion.patch)))state.elites.push(core.clone(champion));
-      state.elites.sort((a,b)=>a.loss-b.loss);state.elites=state.elites.slice(0,16);
-    }
   }
   return state;
 }
@@ -191,11 +197,11 @@ export async function runTableRunner(options={}){
       assertLease();captures++;didWork=true;
       // One model render also serves all targets; do not render the same patch
       // 32 times merely because the comparison target changes.
-      const wave=core.render(p);
+      const prepared=core.prepareModelWave(core.render(p));
       for(let slot=0;slot<32;slot++){
         const candidate=results[slot],current=row.best.get(slot);
         if(!current||candidate.loss<current.loss){row.best.set(slot,candidate);changedAt.set(rowStart+slot,Date.now());dirty.add(slot)}
-        addModelCandidate(row.states.get(slot),{patch:core.clone(p),...core.analyze(wave,job.targets[slot],127)});
+        addModelCandidate(row.states.get(slot),{patch:core.clone(p),...core.analyzePreparedModel(prepared,job.targets[slot],127)});
         totalEvaluations++;dirty.add(slot);
         if(slot%8===7)await sleep(0);
       }

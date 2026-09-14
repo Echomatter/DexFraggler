@@ -75,3 +75,38 @@ test('known exact projected targets recover their phase, gain and DC-independent
   assert.throws(()=>scorePrepared(context,idealTarget('saw'),32),/automatic/);
   assert.throws(()=>scorePrepared(context,{kind:'fourier-path-v1',sin:[1],cos:[0]}));
 });
+
+test('certified phase search retains the global match for competing narrow harmonic peaks',()=>{
+  // One complete sampled period makes the Fourier basis orthogonal. That gives
+  // an independent analytic correlation, including every target harmonic, and
+  // allows all its local maxima to be bracketed and refined without the scorer.
+  const n=256,note=69+12*Math.log2(48000/n/440),gridSize=32768;
+  const scenarios=[
+    [[17,.7,.173],[13,.4,-.293],[1,.025,2.41]],
+    [[61,.8,2.27],[59,.7,-.93],[3,.02,.117]],
+    [[1,.02,.003],[43,.8,0],[47,.61,.043],[62,.4,-.63]],
+  ];
+  for(const harmonics of scenarios){
+    const audio=Array.from({length:n},(_,i)=>.37+harmonics.reduce((sum,[k,a,phase])=>sum+a*Math.sin(TAU*k*i/n+phase),0));
+    const prepared=prepareAudio(audio,note);
+    for(const target of [idealTarget('square'),idealTarget('saw'),blendTargets(idealTarget('triangle'),idealTarget('saw'),.37)]){
+      const {sin}=coefficients(target,prepared.bands),norm=Math.sqrt(harmonics.reduce((sum,[,a])=>sum+a*a,0)*sin.reduce((sum,b)=>sum+b*b,0));
+      const correlation=phase=>harmonics.reduce((sum,[k,a,offset])=>sum+a*sin[k-1]*Math.cos(k*phase-offset),0)/norm;
+      const grid=Float64Array.from({length:gridSize},(_,i)=>correlation(TAU*i/gridSize));
+      let best=-Infinity,maxima=0;
+      for(let i=0;i<gridSize;i++)if(grid[i]>=grid[(i+gridSize-1)%gridSize]&&grid[i]>=grid[(i+1)%gridSize]){
+        maxima++;let left=TAU*(i-1)/gridSize,right=TAU*(i+1)/gridSize;
+        for(let j=0;j<65;j++){
+          const a=left+(right-left)/3,b=right-(right-left)/3;
+          if(correlation(a)<correlation(b))left=a;else right=b;
+        }
+        best=Math.max(best,correlation((left+right)/2));
+      }
+      assert.ok(maxima>10,'The independent objective must contain competing peaks.');
+      const actual=scorePrepared(prepared,target,{preview:false});
+      near(actual.score,best,1e-10,'independent global maximum');
+      near(actual.score,correlation(actual.phase),1e-10,'winning phase correlation');
+      assert.equal(actual.phaseScoreTolerance,1e-10);
+    }
+  }
+});

@@ -1,6 +1,24 @@
 # DexFraggler
 
-A private Sites app for a 32-algorithm × 32-slice DX7 patch table, with a persistent Windows tray runner.
+A research prototype for finding DX7 patches that approximate ideal waveform blends: a 32-algorithm × 32-slice table, a persistent Windows tray runner, and a standalone calculation library. This is a foundation for a future wavetable-remix VST using Dexed.
+
+## Run the calculation models
+
+The math tools need only Node.js 22.13 or newer; no Site account or npm installation is required:
+
+```sh
+git clone https://github.com/Echomatter/DexFraggler.git
+cd DexFraggler
+node scripts/model-lab.mjs score --shape triangle --out triangle-model.json
+node scripts/model-lab.mjs score --shape triangle --native --out triangle-native.json
+node scripts/model-lab.mjs corpus --table downloaded-table.json --out research-corpus.json
+```
+
+The native command uses the included Windows executable. Set `DEXFRAGGLER_NATIVE_EXE` to use a separately built renderer. Import `models/index.mjs` to use waveform formulas, the smooth renderer, analytic derivatives, fitting and SysEx codecs in another program. See [calculation models and VST development path](docs/calculation-models.md), [native build instructions](native/README.md), and the [performance review](docs/performance-review-2026-09-14.md).
+
+The project is a prototype, not a VST or trained predictor. The native wrapper and combined engine are GPL-3.0-or-later; bundled third-party notices and source provenance are under `native/`.
+
+## Table and desktop app
 
 Set waveform anchors on any column. Columns linearly blend exact unit-peak sine, triangle, square and saw formulas. Ideal targets never come from measured results. Rows keep their algorithm fixed while tuning, levels and feedback are optimized. Click a cell to inspect it; open Cell details for measurements, operators, routing and patch download.
 
@@ -27,7 +45,7 @@ The Site stores independent named scans automatically. New scan keeps the curren
 
 ## Development and verification
 
-- `npm run dev` and `npm run build`: Sites development server and Worker build.
+- `npm ci`, then `npm run dev` or `npm run build`: Sites development server and Worker build.
 - `node --test tests/*.test.mjs`: model, derivatives, scoring, cache, targets, scheduling and codecs.
 - `node tests/table-api.mjs`: authenticated local D1 integration, row transactions and stale-result rejection (development server required).
 - `node tests/scans-api.mjs`: local native-renderer and desktop command integration for scan creation, switching and seed imports.
@@ -35,4 +53,4 @@ The Site stores independent named scans automatically. New scan keeps the curren
 
 D1 migrations under `drizzle/` define persisted tables. `native/` retains the engine sources, source manifest and upstream licenses; rebuild the native executable with its CMake/MSVC configuration.
 
-WebMCP exposes `get_wavetable`, `select_wavetable_cell`, `set_wavetable_anchor` and `set_table_running` on the map and cell-details pages. Hosting remains private.
+WebMCP exposes `get_wavetable`, `select_wavetable_cell`, `set_wavetable_anchor` and `set_table_running` on the map and cell-details pages. The existing hosted Site remains private; sharing this repository does not provide access to its scans or credentials.

@@ -27,6 +27,30 @@ test('a cached optimizer retains its exploration cursor for an unchanged target'
  assert.equal(restored.seedCursor,811);assert.equal(restored.rng,123);
 });
 
+test('restart retains all useful saved elites while rebuilding optimizer mechanics',()=>{
+ const saved=core.initialState(targets[0],[],127,1);
+ saved.evaluations=25000;saved.rng=123;saved.seedCursor=900;
+ saved.elites=Array.from({length:16},(_,i)=>{
+  const patch=core.clone(p);patch.operators[5].fine=i+1;
+  return {patch,loss:(i+1)*1e-8,score:1-(i+1)*1e-8,error:Math.sqrt((i+1)*1e-8),spectralError:0,shift:0,scale:1};
+ });
+ const result=restoreState(core,targets[0],keys[0],DEFAULT_CONFIG,1,{current:true,target_key:keys[0],state:saved,evaluations:25000});
+ assert.deepEqual(result.elites,saved.elites);assert.equal(result.evaluations,25000);
+ assert.notEqual(result.rng,123);assert.notEqual(result.seedCursor,900);
+ result.elites[0].patch.feedback=7;assert.equal(saved.elites[0].patch.feedback,0);
+});
+
+test('saved candidates for a different target are rescored and a cached different row is rebuilt',()=>{
+ const saved=core.initialState(targets[31],[],127,1),patch=core.clone(p);patch.feedback=2;patch.operators[5].level=72;
+ saved.elites=[{...core.evaluate(patch,targets[31]),loss:0,score:1}];
+ const result=restoreState(core,targets[0],keys[0],DEFAULT_CONFIG,1,{current:true,target_key:keys[0],state:saved});
+ const retained=result.elites.find(e=>JSON.stringify(e.patch)===JSON.stringify(patch));
+ assert.ok(retained);assert.deepEqual(retained,core.evaluate(patch,targets[0]));assert.ok(retained.loss>0);
+ const other=core.initialState(targets[0],[],127,2);other.rng=123;
+ const rebuilt=restoreState(core,targets[0],keys[0],DEFAULT_CONFIG,1,null,other);
+ assert.equal(rebuilt.algorithm,1);assert.notEqual(rebuilt.rng,123);assert.ok(rebuilt.elites.every(e=>e.patch.algorithm===1));
+});
+
 test('a stalled lease renewal does not block tray pause/status polling',async()=>{
   const temp=await fs.mkdtemp(path.join(os.tmpdir(),'dexfraggler-renew-test-'));
   await fs.writeFile(path.join(temp,'runner-control.json'),JSON.stringify({paused:false,priority:'Normal'}));

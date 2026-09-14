@@ -1,16 +1,21 @@
 import {spawn} from 'node:child_process';
 import readline from 'node:readline';
 import {fileURLToPath} from 'node:url';
+import {readFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {resolve} from 'node:path';
 import {sysex,clone} from '../public/core.mjs';
 import {METRIC_VERSION,prepareAudio,scorePrepared} from './measurement.mjs';
 
-const BINARY_SHA256='d67045da4b058bb1c7ff62cc347e5cfbd3ea67e260475bb10a7a00cc04d2b5e2';
-const DEFAULT_EXE=fileURLToPath(new URL('../native/bin/DexfragglerReference.exe',import.meta.url));
+const DEFAULT_EXE=fileURLToPath(new URL(`../native/bin/DexfragglerReference${process.platform==='win32'?'.exe':''}`,import.meta.url));
 
 export class Reference {
- constructor({executablePath=DEFAULT_EXE,cacheLimit=16}={}){
+ constructor({executablePath=process.env.DEXFRAGGLER_NATIVE_EXE||DEFAULT_EXE,cacheLimit=16}={}){
   if(!Number.isInteger(cacheLimit)||cacheLimit<1||cacheLimit>64)throw Error('Native capture cache limit must be 1 through 64.');
   this.cacheLimit=cacheLimit;
+  executablePath=resolve(executablePath);
+  // A rebuilt or explicitly selected engine must identify its actual bytes.
+  this.binarySha256=createHash('sha256').update(readFileSync(executablePath)).digest('hex');
   this.pending=[];this.cache=new Map();this.inflight=new Map();
   this.healthy=true;this.closing=false;this.startedAt=Date.now();
   this.counters={renders:0,cacheHits:0,inflightHits:0,preparedPitches:0,evictions:0};
@@ -105,7 +110,7 @@ export class Reference {
    const notes=contexts.map(context=>scorePrepared(context,target,{preview}));
    return {engine:'Dexed Mark I / native',metricVersion:METRIC_VERSION,sampleRate:48000,velocity:100,captureSamples:4096,offsetSamples:7200,
     patch:clone(patch),notes,loss:Math.max(...notes.map(note=>note.error**2)),score:Math.min(...notes.map(note=>note.score)),testedAt:Date.now(),
-    binarySha256:BINARY_SHA256,sourceManifest:'native/source-provenance.json'};
+    binarySha256:this.binarySha256,sourceManifest:'native/source-provenance.json'};
   });
  }
 
