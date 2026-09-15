@@ -38,6 +38,8 @@ The smooth proposal model uses an analytic six-level Jacobian, including nested 
 
 Native captures and Fourier projections are reused across all 32 targets in a row. The scorer evaluates finite trigonometric polynomials at arbitrary phase, using every target harmonic below Nyquist. A curvature bound guides adaptive phase refinement to a 1e-10 score tolerance. Preview arrays are generated only for improved cells. Exact SysEx keys cache captures without merging distinct patches. Row leases, target generations and atomic database batches prevent stale or regressing checkpoints.
 
+The table scheduler uses a two-lane priority policy: stale or least-visited cells preserve coverage, while every fourth decision can give a materially weak native result one bounded recovery visit. Candidate source columns are ranked by native loss, coverage deficit, age and model/native disagreement, which prevents easy interpolated columns from monopolizing the search. Exact row scores are memoized by patch and target generation, and the proposal cursor resumes beyond persisted model evaluations after a restart.
+
 The model remains approximate; measurements cover the stated pitches and duration. No global-optimality certificate or FM1 hardware comparison is claimed. See `/method`, `docs/native-scoring.md` and `docs/analytic-fitting.md`.
 
 Table progress averages all 1,024 native match scores with unmeasured cells contributing zero. Every cell remains in the search indefinitely. Rank mode orders current cells against one another; equal scores share a rank.

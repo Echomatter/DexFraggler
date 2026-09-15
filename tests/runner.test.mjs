@@ -5,10 +5,18 @@ import os from 'node:os';
 import path from 'node:path';
 import * as core from '../public/core.mjs';
 import {columnTargets,DEFAULT_CONFIG,targetKey,METRIC_VERSION} from '../public/targets.mjs';
-import {restoreState,runTableRunner} from '../runner/table-runner.mjs';
+import {rankRowSlots,restoreState,runTableRunner} from '../runner/table-runner.mjs';
 
 const targets=columnTargets(DEFAULT_CONFIG),keys=targets.map(targetKey);
 const p=core.blank();p.algorithm=1;
+
+test('row source ranking favors weak and under-covered opportunities',()=>{
+ const cells=Array.from({length:32},(_,slot)=>({id:slot,visits:12,native_loss:.02,native_score:.99,model_score:.99,updated_at:900000}));
+ cells[3].visits=11;cells[3].native_loss=.08;cells[3].native_score=.96;cells[3].model_score=.995;
+ cells[29].native_loss=.5;cells[29].native_score=.94;cells[29].model_score=.98;
+ const ranked=rankRowSlots(cells,new Map(),1000000);
+ assert.equal(ranked[0],29);assert.ok(ranked.indexOf(3)<ranked.indexOf(0));
+});
 function nativeResult(patch,loss=.1){return {patch:core.clone(patch),engine:'Dexed Mark I / native',metricVersion:METRIC_VERSION,loss,score:Math.sqrt(1-loss),notes:[45,57,69].map(note=>({note,error:Math.sqrt(loss),score:Math.sqrt(1-loss),wave:[0],target:[0]}))}}
 
 test('restart reconstructs mechanics while preserving the saved champion and count',()=>{

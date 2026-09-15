@@ -13,6 +13,22 @@ const PRIORITIES={Idle:19,BelowNormal:10,Normal:0,AboveNormal:-7,High:-14};
 export function normalizePriority(value){return Object.keys(PRIORITIES).find(k=>k.toLowerCase()===String(value).replace(/[ _-]/g,'').toLowerCase())??'BelowNormal'}
 const patchKey=p=>JSON.stringify(p);
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
+const SCORE_MEMO_LIMIT=4096;
+const numberOrNull=value=>{if(value===null||value===undefined||value==='')return null;const n=Number(value);return Number.isFinite(n)?n:null};
+
+/** Rank source columns by the opportunity they offer the next candidate.
+ * Weak native results dominate, while coverage deficit, age, and model/native
+ * disagreement break ties. This keeps easy interpolated columns from
+ * monopolizing candidate proposals after they get a head start.
+ */
+export function rankRowSlots(cells,best,now=Date.now()){
+  const bySlot=new Map(cells.map(c=>[Number(c.id)%32,c])),items=Array.from({length:32},(_,slot)=>{
+    const cell=bySlot.get(slot),result=best.get(slot),loss=numberOrNull(result?.loss??cell?.native_loss),model=numberOrNull(cell?.model_score),native=numberOrNull(result?.score??cell?.native_score),visits=Math.max(0,Number(cell?.visits)||0),age=Math.max(0,now-(numberOrNull(cell?.updated_at)??0));
+    return {slot,loss:finite(loss)?Math.max(0,Math.min(1,loss)):1,visits,age,disagreement:finite(model)&&finite(native)?Math.min(1,Math.abs(model-native)*4):0};
+  });
+  const min=Math.min(...items.map(item=>item.visits)),max=Math.max(...items.map(item=>item.visits)),spread=Math.max(1,max-min);
+  return items.map(item=>({...item,coverage:(max-item.visits)/spread,staleness:Math.min(1,item.age/600000)})).map(item=>({...item,priority:.65*item.loss+.2*item.coverage+.1*item.staleness+.05*item.disagreement})).sort((a,b)=>b.priority-a.priority||b.loss-a.loss||a.visits-b.visits||b.age-a.age||a.slot-b.slot).map(item=>item.slot);
+}
 
 export async function atomicJson(filename,value){
   const temp=filename+'.'+process.pid+'.'+randomUUID()+'.tmp';
@@ -84,7 +100,8 @@ export async function runTableRunner(options={}){
   let totalEvaluations=0,lastWrite=0,lastHeartbeat=0,ticking=false;
   const changedAt=new Map(),rows=new Map();
   const rowBudget=Math.max(500,Math.min(6000,config.rowBudgetMs??2800));
-  const renewalControllers=new Set(),renewIntervalMs=options.renewIntervalMs??30000;
+  const renewalControllers=new Set(),renewIntervalMs=options.renewIntervalMs??30000,scoreMemo=new Map();
+  const rememberScores=(key,value)=>{scoreMemo.delete(key);scoreMemo.set(key,value);while(scoreMemo.size>SCORE_MEMO_LIMIT)scoreMemo.delete(scoreMemo.keys().next().value)};
   const stop=()=>{stopping=true};
   process.on('SIGINT',stop);process.on('SIGTERM',stop);
   if(options.signal)options.signal.addEventListener('abort',stop,{once:true});
@@ -146,6 +163,10 @@ export async function runTableRunner(options={}){
       if(remote&&(!row.best.get(slot)||remote.loss<=row.best.get(slot).loss))row.best.set(slot,remote);
       if(slot%8===7)await sleep(0);
     }
+    // The native proposal cursor is in-memory, so resume it past the persisted
+    // model work instead of replaying the same early deterministic mutations
+    // after a runner restart.
+    row.count=Math.max(row.count,...[...row.states.values()].map(state=>Number(state.evaluations)||0));
     // Keep only search memory for the present table generation.
     for(const [algorithm,other] of rows)if(other.generation!==job.generation)rows.delete(algorithm);
     let state=row.states.get(focus);
@@ -158,7 +179,7 @@ export async function runTableRunner(options={}){
     const add=p=>{if(p?.algorithm===job.algorithm&&!seeds.some(x=>patchKey(x)===patchKey(p)))seeds.push(p)};
     for(const seed of job.seeds??[])add(seed.patch);
     add(state.elites[0]?.patch);add(row.best.get(focus)?.patch);add(cells.get(job.id)?.reference?.patch);add(cells.get(job.id)?.patch);
-    const ranked=Array.from({length:32},(_,slot)=>slot).sort((a,b)=>(row.best.get(b)?.loss??2)-(row.best.get(a)?.loss??2));
+    const ranked=rankRowSlots([...cells.values()],row.best);
     for(const slot of [...job.config.anchors.map(a=>a.slot),...ranked]){add(row.states.get(slot)?.elites[0]?.patch);add(row.best.get(slot)?.patch);if(seeds.length>=10)break}
     // A neighboring pair often gives a useful first proposal for an in-between
     // column. It is a seed, never an assumed solution for that column.
@@ -166,26 +187,32 @@ export async function runTableRunner(options={}){
     const left=neighbors.filter(c=>c.slot<focus).sort((a,b)=>b.slot-a.slot)[0],right=neighbors.filter(c=>c.slot>focus).sort((a,b)=>a.slot-b.slot)[0];
     if(left&&right)try{add(core.interpolate(left.patch,right.patch,(focus-left.slot)/(right.slot-left.slot)))}catch{}
     const end=Date.now()+rowBudget;
-    let captures=0,duplicateAttempts=0;
+    let captures=0,memoHits=0,duplicateAttempts=0;
     while(!stopping&&(Date.now()<end||!row.best.get(focus))){
       assertLease();
       if(localPaused&&row.best.get(focus))break;
       let p=seeds.shift();
       if(!p){
-        const slot=row.count%5===0?ranked[Math.floor(row.count/5)%ranked.length]:focus;
+        const exploratory=row.count%4===0,slot=exploratory?ranked[Math.floor(row.count/4)%ranked.length]:focus;
         const base=row.count%7===0?row.states.get(slot).elites[0].patch:row.best.get(slot)?.patch??row.states.get(slot).elites[0].patch;
         p=native.nativeProposal(base,row.count++,job.config.allowDetune);
       }
       const key=patchKey(p);
-      if(row.checked.has(key)&&!imported.has(key)&&row.best.get(focus)){if(++duplicateAttempts>128)break;continue}
+      const scoreMemoKey=signature+':'+key,cachedScores=scoreMemo.get(scoreMemoKey);
+      if((row.checked.has(key)||cachedScores)&&!imported.has(key)&&row.best.get(focus)){if(++duplicateAttempts>128)break;continue}
       duplicateAttempts=0;
       // scoreMany reuses its cached capture/prepared pitch transforms between
-      // chunks. Yield after eight targets so even display-wave generation for
-      // a full row cannot starve tray pause/priority polling.
-      const results=[];
-      for(let start=0;start<32;start+=8){
-        results.push(...await reference.scoreMany(p,job.targets.slice(start,start+8),{preview:false}));
-        assertLease();await sleep(0);
+      // chunks. Scalar row scores are also memoized by exact patch and target
+      // generation, so a long-running process does not render the same patch
+      // again after the short row duplicate window has rolled over.
+      let results;
+      if(cachedScores){memoHits++;rememberScores(scoreMemoKey,cachedScores);results=core.clone(cachedScores)}else{
+        results=[];
+        for(let start=0;start<32;start+=8){
+          results.push(...await reference.scoreMany(p,job.targets.slice(start,start+8),{preview:false}));
+          assertLease();await sleep(0);
+        }
+        rememberScores(scoreMemoKey,results.map(result=>({engine:result.engine,metricVersion:result.metricVersion,sampleRate:result.sampleRate,velocity:result.velocity,captureSamples:result.captureSamples,offsetSamples:result.offsetSamples,patch:core.clone(result.patch),notes:result.notes.map(note=>Object.fromEntries(Object.entries(note).filter(([name])=>!['wave','target','idealTarget'].includes(name)))),loss:result.loss,score:result.score,testedAt:result.testedAt,binarySha256:result.binarySha256,sourceManifest:result.sourceManifest})));
       }
       if(!Array.isArray(results)||results.length!==32)throw Error('Native row scoring returned an incomplete row.');
       // Display samples are only needed for new champions. Scalar comparisons
@@ -227,7 +254,7 @@ export async function runTableRunner(options={}){
     }
     phase='Saving table';
     await request({action:'checkpoint_row',worker,id:job.id,generation:job.generation,cells:updates,consumedSeeds:[...consumed]});
-    log(new Date().toISOString(),`Algorithm ${job.algorithm}, slice ${focus+1}: ${captures} captures, ${updates.length} cells saved.`);
+    log(new Date().toISOString(),`Algorithm ${job.algorithm}, slice ${focus+1}: ${captures} captures, ${memoHits} score-cache hits, ${updates.length} cells saved.`);
   }
 
   log(new Date().toISOString(),'DexFraggler table scheduler started.');

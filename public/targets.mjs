@@ -102,8 +102,26 @@ export function projectionInfo(target,base,sampleRate=48000){
   const bands=nyquistHarmonics(base,sampleRate),series=coefficients(target,bands),fullEnergy=idealEnergy(target),projectedEnergy=series.sin.reduce((sum,x)=>sum+x*x,0)/2;
   return {bands,sampleRate,base,fullEnergy,projectedEnergy,omittedEnergy:Math.max(0,fullEnergy-projectedEnergy),retainedEnergy:Math.min(1,projectedEnergy/fullEnergy)};
 }
+// The scheduler deliberately has two lanes. Coverage advances the least-visited
+// frontier, while one bounded recovery turn periodically advances a weak cell by
+// at most one visit. This keeps poor results moving without allowing easy,
+// interpolated columns to crowd out untouched cells forever.
+export const SCHEDULER_POLICY=Object.freeze({recoveryEvery:4,recoveryLead:1});
+const numberOrNull=value=>{if(value===null||value===undefined||value==='')return null;const n=Number(value);return Number.isFinite(n)?n:null};
+const ageOf=(updatedAt,now)=>Math.max(0,now-(numberOrNull(updatedAt)??0));
+function cellOrder(a,b,mode){
+  if(mode==='recovery')return b.loss-a.loss||b.age-a.age||a.visits-b.visits||a.anchor-b.anchor||a.slot-b.slot||a.id-b.id;
+  return b.loss-a.loss||a.anchor-b.anchor||a.age-b.age||a.visits-b.visits||a.slot-b.slot||a.id-b.id;
+}
 export function scheduleCell(cells,config,keys){
-  const byId=new Map(cells.map(c=>[c.id,c])),anchors=new Set(config.anchors.map(a=>a.slot));
-  return Array.from({length:1024},(_,id)=>{const cell=byId.get(id);return {id,visits:cell?.target_key===keys[id%32]?cell.visits:0,anchor:anchors.has(id%32)?0:1,blocked:Number(cell?.failed_until)>Date.now()};})
-    .filter(c=>!c.blocked).sort((a,b)=>a.visits-b.visits||a.anchor-b.anchor||(a.id%32)-(b.id%32)||a.id-b.id)[0]?.id??null;
+  const now=Date.now(),byId=new Map(cells.map(c=>[Number(c.id),c])),anchors=new Set(config.anchors.map(a=>a.slot));
+  const available=Array.from({length:1024},(_,id)=>{
+    const cell=byId.get(id),current=cell?.target_key===keys[id%32],visits=current?Math.max(0,numberOrNull(cell?.visits)??0):0,loss=current?numberOrNull(cell?.native_loss):null;
+    return {id,slot:id%32,current,visits,loss:loss??0,knownLoss:loss!==null,age:ageOf(cell?.updated_at,now),anchor:anchors.has(id%32)?0:1,blocked:Number(cell?.failed_until)>now};
+  }).filter(c=>!c.blocked);
+  if(!available.length)return null;
+  const stale=available.filter(c=>!c.current);
+  if(stale.length)return stale.sort((a,b)=>b.age-a.age||a.id-b.id)[0].id;
+  const minimum=Math.min(...available.map(c=>c.visits)),total=available.reduce((sum,c)=>sum+c.visits,0),frontier=available.filter(c=>c.visits===minimum),weak=available.filter(c=>c.knownLoss&&c.visits<=minimum+SCHEDULER_POLICY.recoveryLead),recovery=weak.length>0&&total%SCHEDULER_POLICY.recoveryEvery===SCHEDULER_POLICY.recoveryEvery-1;
+  return (recovery?weak:frontier).sort((a,b)=>cellOrder(a,b,recovery?'recovery':'coverage'))[0]?.id??null;
 }
