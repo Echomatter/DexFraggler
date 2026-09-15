@@ -140,6 +140,7 @@ test('compact row claims reuse stored measurements without retransmitting previe
   return {ok:true};
  }});
  assert.equal(checkpoints,2);
+ assert.ok((await fs.stat(path.join(temp,'native-score-cache.json'))).size>0,'Exact compact row scores must survive a runner restart.');
 });
 
 test('a superseded checkpoint is discarded without marking the cell failed',async()=>{

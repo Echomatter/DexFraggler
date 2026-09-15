@@ -16,7 +16,7 @@ node scripts/model-lab.mjs corpus --table downloaded-table.json --out research-c
 
 The native command uses the included Windows executable. Set `DEXFRAGGLER_NATIVE_EXE` to use a separately built renderer. Import `models/index.mjs` to use waveform formulas, the smooth renderer, analytic derivatives, fitting and SysEx codecs in another program. See [calculation models and VST development path](docs/calculation-models.md), [native build instructions](native/README.md), and the [performance review](docs/performance-review-2026-09-14.md).
 
-The project is a prototype, not a VST or trained predictor. The native wrapper and combined engine are GPL-3.0-or-later; bundled third-party notices and source provenance are under `native/`.
+The project is a prototype, not a VST. Its local predictor is an optional proposal aid, never a substitute for native verification. The native wrapper and combined engine are GPL-3.0-or-later; bundled third-party notices and source provenance are under `native/`.
 
 ## Table and desktop app
 
@@ -38,7 +38,7 @@ The smooth proposal model uses an analytic six-level Jacobian, including nested 
 
 Native captures and Fourier projections are reused across all 32 targets in a row. The scorer evaluates finite trigonometric polynomials at arbitrary phase, using every target harmonic below Nyquist. A curvature bound guides adaptive phase refinement to a 1e-10 score tolerance. Preview arrays are generated only for improved cells. Exact SysEx keys cache captures without merging distinct patches. Row leases, target generations and atomic database batches prevent stale or regressing checkpoints.
 
-The table scheduler uses a two-lane priority policy: stale or least-visited cells preserve coverage, while every fourth decision can give a materially weak native result one bounded recovery visit. Candidate source columns are ranked by native loss, coverage deficit, age and model/native disagreement, which prevents easy interpolated columns from monopolizing the search. Exact row scores are memoized by patch and target generation, and the proposal cursor resumes beyond persisted model evaluations after a restart.
+The table scheduler uses a two-lane priority policy: stale or least-visited cells preserve coverage, while every fourth decision can give a materially weak native result one bounded recovery visit. Candidate source columns are ranked by native loss, coverage deficit, age, model/native disagreement and source-frame provenance, which prevents easy interpolated columns from monopolizing the search. Exact row scores are memoized by patch and target generation in a bounded local cache, and the proposal cursor resumes beyond persisted model evaluations after a restart.
 
 The local sample workflow at `/sample` accepts single-cycle WAVs, explicit-frame wavetables and sustained pitched samples. It normalizes, aligns, previews and distributes 32 phase-bearing periodic targets, then stores them in a named scan for the same resumable native solve, Listen view and legal SysEx export. Native scoring preserves imported sine/cosine phase, and interpolated source frames are marked in provenance and given a small fairness edge against untouched measured frames during source selection.
 

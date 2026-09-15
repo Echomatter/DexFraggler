@@ -108,8 +108,11 @@ export async function runTableRunner(options={}){
   let totalEvaluations=0,lastWrite=0,lastHeartbeat=0,ticking=false;
   const changedAt=new Map(),rows=new Map();
   const rowBudget=Math.max(500,Math.min(6000,config.rowBudgetMs??2800));
-  const renewalControllers=new Set(),renewIntervalMs=options.renewIntervalMs??30000,scoreMemo=new Map();
-  const rememberScores=(key,value)=>{scoreMemo.delete(key);scoreMemo.set(key,value);while(scoreMemo.size>SCORE_MEMO_LIMIT)scoreMemo.delete(scoreMemo.keys().next().value)};
+  const renewalControllers=new Set(),renewIntervalMs=options.renewIntervalMs??30000,scoreMemo=new Map(),scoreCachePath=path.resolve(runtimeDir,String(config.scoreCachePath??'native-score-cache.json'));
+  try{const saved=JSON.parse(await fs.readFile(scoreCachePath,'utf8'));if(Array.isArray(saved))for(const entry of saved.slice(-SCORE_MEMO_LIMIT))if(typeof entry?.key==='string'&&Array.isArray(entry.value))scoreMemo.set(entry.key,entry.value)}catch(error){if(error.code!=='ENOENT')errorLog(new Date().toISOString(),'Score cache unavailable:',error.message)}
+  let scorePersist=Promise.resolve(),scorePersistQueued=false;
+  const persistScores=()=>{if(scorePersistQueued)return;scorePersistQueued=true;scorePersist=scorePersist.then(()=>atomicJson(scoreCachePath,[...scoreMemo].map(([key,value])=>({key,value})))).catch(error=>errorLog(new Date().toISOString(),'Score cache write failed:',error.message)).finally(()=>{scorePersistQueued=false})};
+  const rememberScores=(key,value)=>{scoreMemo.delete(key);scoreMemo.set(key,value);while(scoreMemo.size>SCORE_MEMO_LIMIT)scoreMemo.delete(scoreMemo.keys().next().value);persistScores()};
   const stop=()=>{stopping=true};
   process.on('SIGINT',stop);process.on('SIGTERM',stop);
   if(options.signal)options.signal.addEventListener('abort',stop,{once:true});
@@ -119,7 +122,7 @@ export async function runTableRunner(options={}){
   const publish=async(force=false)=>{
     if(!force&&Date.now()-lastWrite<750)return;
     lastWrite=Date.now();
-    await atomicJson(statusFile,{pid:process.pid,nativePid:reference.child?.pid??null,nativeProcessStartTime:reference.startedAt??null,processStartTime,root,running:cloudRunning&&!localPaused&&!stopping,localPaused,priority,phase,updatedAt:Date.now(),evaluations:totalEvaluations,cellsPerMinute:cellsPerMinute(),activeId:active?.job.id??null,priorityError});
+    await atomicJson(statusFile,{pid:process.pid,nativePid:reference.child?.pid??null,nativeProcessStartTime:reference.startedAt??null,processStartTime,root,running:cloudRunning&&!localPaused&&!stopping,localPaused,priority,phase,updatedAt:Date.now(),evaluations:totalEvaluations,cellsPerMinute:cellsPerMinute(),activeId:active?.job.id??null,scoreCacheEntries:scoreMemo.size,priorityError});
   };
   const request=async(body,signal)=>{
     if(options.request)return options.request(body,signal);
@@ -294,6 +297,7 @@ export async function runTableRunner(options={}){
   }finally{
     clearInterval(timer);process.off('SIGINT',stop);process.off('SIGTERM',stop);options.signal?.removeEventListener('abort',stop);
     for(const controller of renewalControllers)controller.abort();
+    await scorePersist;
     await reference.close();phase='Stopped';cloudRunning=false;await publish(true);
     log('DexFraggler stopped. Saved anchors and cell results are retained.');
   }

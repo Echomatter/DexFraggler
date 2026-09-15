@@ -6,6 +6,14 @@ import {bankSysex,fromBank} from '../public/bank.mjs';
 import {tableMetrics,relativeRanks,tablePalette} from '../public/table-metrics.mjs';
 test('scheduler covers all 1024 cells before repeating and prioritizes stale targets',()=>{const config=DEFAULT_CONFIG,keys=columnTargets(config).map(targetKey),cells=[],seen=new Set();for(let i=0;i<1024;i++){const id=scheduleCell(cells,config,keys);assert.ok(!seen.has(id));seen.add(id);cells.push({id,visits:1,target_key:keys[id%32]})}assert.equal(seen.size,1024);assert.equal(scheduleCell(cells,config,keys),0);cells[500].target_key='obsolete';assert.equal(scheduleCell(cells,config,keys),cells[500].id)});
 test('scheduler gives weak cells bounded recovery turns without starving coverage',()=>{const config=DEFAULT_CONFIG,keys=columnTargets(config).map(targetKey),cells=Array.from({length:1024},(_,id)=>({id,visits:0,target_key:keys[id%32]}));for(const id of [500,501,502])cells[id].visits=1;cells[501].native_loss=.2;cells[502].native_loss=.08;assert.equal(scheduleCell(cells,config,keys),501);cells[501].visits=2;assert.equal(scheduleCell(cells,config,keys),0)});
+test('table metrics expose direct versus interpolated imported-frame cohorts',()=>{
+ const targets=Array.from({length:32},(_,slot)=>({source:{interpolated:slot%2===1}})),cells=[{id:0,current:true,native_score:.8},{id:1,current:true,native_score:.6},{id:2,current:true,native_score:.9}];
+ const stats=tableMetrics(cells,targets);assert.equal(stats.directMeasured,2);assert.equal(stats.interpolatedMeasured,1);assert.ok(Math.abs(stats.directMatch-.85)<1e-12);assert.equal(stats.interpolatedMatch,.6);
+});
+test('full scheduler preserves coverage while preferring direct imported frames on equal debt',()=>{
+ const targetSet=Array.from({length:32},(_,slot)=>({kind:'periodic-wave-v1',source:{interpolated:slot===0}})),config={allowDetune:false,anchors:[],targetSet},keys=targetSet.map((_,slot)=>String(slot)),cells=Array.from({length:1024},(_,id)=>({id,visits:2,target_key:keys[id%32],native_loss:.01}));
+ assert.equal(scheduleCell(cells,config,keys)%32,1);
+});
 test('32 voice banks round trip all algorithms and preserve legal codes',()=>{const patches=Array.from({length:32},(_,i)=>{const p=blank();p.algorithm=i+1;p.feedback=i%8;p.operators.forEach((o,j)=>{o.coarse=(i+j)%32;o.fine=(i*3+j)%100;o.level=(i+j*7)%100;o.detune=(i+j)%15;o.mode=j%2});return p});const b=bankSysex(patches,[],2);assert.equal(b.length,4104);assert.equal(b[2],1);assert.deepEqual(fromBank(b),patches);assert.throws(()=>bankSysex(patches.slice(0,31)));const bad=b.slice();bad[20]^=1;assert.throws(()=>fromBank(bad))});
 
 test('progress is the exact full-table average with unmeasured cells contributing zero',()=>{

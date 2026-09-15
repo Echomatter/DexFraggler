@@ -138,14 +138,15 @@ export const SCHEDULER_POLICY=Object.freeze({recoveryEvery:4,recoveryLead:1});
 const numberOrNull=value=>{if(value===null||value===undefined||value==='')return null;const n=Number(value);return Number.isFinite(n)?n:null};
 const ageOf=(updatedAt,now)=>Math.max(0,now-(numberOrNull(updatedAt)??0));
 function cellOrder(a,b,mode){
-  if(mode==='recovery')return b.loss-a.loss||b.age-a.age||a.visits-b.visits||a.anchor-b.anchor||a.slot-b.slot||a.id-b.id;
-  return b.loss-a.loss||a.anchor-b.anchor||a.age-b.age||a.visits-b.visits||a.slot-b.slot||a.id-b.id;
+  if(mode==='recovery')return b.loss-a.loss||b.difficulty-a.difficulty||b.age-a.age||a.visits-b.visits||a.anchor-b.anchor||a.slot-b.slot||a.id-b.id;
+  return b.loss-a.loss||b.difficulty-a.difficulty||a.anchor-b.anchor||a.age-b.age||a.visits-b.visits||a.slot-b.slot||a.id-b.id;
 }
 export function scheduleCell(cells,config,keys){
   const now=Date.now(),byId=new Map(cells.map(c=>[Number(c.id),c])),anchors=new Set(config.anchors.map(a=>a.slot));
   const available=Array.from({length:1024},(_,id)=>{
     const cell=byId.get(id),current=cell?.target_key===keys[id%32],visits=current?Math.max(0,numberOrNull(cell?.visits)??0):0,loss=current?numberOrNull(cell?.native_loss):null;
-    return {id,slot:id%32,current,visits,loss:loss??0,knownLoss:loss!==null,age:ageOf(cell?.updated_at,now),anchor:anchors.has(id%32)?0:1,blocked:Number(cell?.failed_until)>now};
+    const interpolated=config.targetSet?.[id%32]?.source?.interpolated===true;
+    return {id,slot:id%32,current,visits,loss:loss??0,knownLoss:loss!==null,age:ageOf(cell?.updated_at,now),anchor:anchors.has(id%32)?0:1,difficulty:interpolated?0:1,blocked:Number(cell?.failed_until)>now};
   }).filter(c=>!c.blocked);
   if(!available.length)return null;
   const stale=available.filter(c=>!c.current);

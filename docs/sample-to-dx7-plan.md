@@ -22,7 +22,7 @@ Build a local-first `Import → Preview frames → Solve → Audition → Export
 
 ### 2. Persistent imported workflows — complete
 
-- [x] Persist source metadata, normalized frames, target identities, and affected caches in the existing named-scan config and exact target-key map.
+- [x] Persist source metadata, normalized frames, target identities, and affected caches in the existing named-scan config, exact target-key map, and bounded native score memo.
 - [x] Reuse the existing row leases, atomic checkpoints, local pause, cancellation signal, and restart reconstruction for imported targets.
 
 ### 3. Retrieval baseline and native verification — complete baseline

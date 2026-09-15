@@ -45,6 +45,11 @@ foreach ($entry in $cases.GetEnumerator()) {
     try { [void]$validator.Invoke($null, [object[]]@(,$candidate)) } catch { $cause=$_.Exception; while ($cause.InnerException) { $cause=$cause.InnerException }; if ($cause -is [FormatException]) { $accepted=$false } else { throw } }
     $checks[$entry.Key] = ($accepted -eq $entry.Value.accept)
 }
+$periodicTarget = @{kind='periodic-wave-v1';samples=@(0,1);sampleRate=48000;fundamentalHz=220;harmonics=@{sin=@(1);cos=@(0)};source=@{mode='single-cycle'};preprocessVersion='audio-prep-v1';id='00000000'}
+$importedFixture = @{format='dexfraggler-table';version=4;targetVersion='ideal-waveform-v1';config=@{allowDetune=$false;anchors=@();targetSet=@(0..31 | ForEach-Object { $periodicTarget });source=@{mode='single-cycle'}};targets=@(0..31 | ForEach-Object { $periodicTarget });model='fixture';metricVersion='current-metric';cells=@()} | ConvertTo-Json -Depth 20 -Compress
+$importedAccepted = $true
+try { [void]$validator.Invoke($null, [object[]]@($serializer.DeserializeObject($importedFixture))) } catch { $importedAccepted = $false }
+$checks['validImportedTargets'] = $importedAccepted
 $passed = -not ($checks.Values -contains $false)
 $report = @{passed=$passed;checks=$checks;networkRequests=0;liveProjectTouched=$false;finishedAt=[DateTime]::UtcNow.ToString('o')}
 $json = $report | ConvertTo-Json -Depth 8

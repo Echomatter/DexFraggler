@@ -279,10 +279,16 @@ namespace DexFragglerTray
             if (!System.Object.Equals(Field(table, "format"), "dexfraggler-table") || Number(Field(table, "version")) != 4
                 || !System.Object.Equals(Field(table, "targetVersion"), TargetVersion)) throw new FormatException();
             Dictionary<string, object> config = Object(Field(table, "config"));
-            Keys(config, "allowDetune", "anchors");
+            bool imported = config.ContainsKey("targetSet");
+            if (imported)
+            {
+                if (config.Keys.Any(key => key != "allowDetune" && key != "anchors" && key != "targetSet" && key != "source")) throw new FormatException();
+                if (config.ContainsKey("source")) Object(config["source"]);
+            }
+            else Keys(config, "allowDetune", "anchors");
             if (!(Field(config, "allowDetune") is bool)) throw new FormatException();
             object[] anchors = Array(Field(config, "anchors"));
-            if (anchors.Length < 1 || anchors.Length > 32) throw new FormatException();
+            if (anchors.Length < (imported ? 0 : 1) || anchors.Length > 32) throw new FormatException();
             double previous = -1;
             foreach (object item in anchors)
             {
@@ -295,14 +301,35 @@ namespace DexFragglerTray
             if (targets.Length != 32) throw new FormatException();
             foreach (object item in targets)
             {
-                Dictionary<string, object> target = Object(item); Keys(target, "kind", "weights");
-                if (!System.Object.Equals(Field(target, "kind"), TargetVersion)) throw new FormatException();
-                object[] weights = Array(Field(target, "weights"));
-                if (weights.Length != 4) throw new FormatException();
-                double sum = 0;
-                foreach (object weight in weights) { double n = Number(weight); if (n < 0) throw new FormatException(); sum += n; }
-                if (Math.Abs(sum - 1) > 1e-12) throw new FormatException();
+                Dictionary<string, object> target = Object(item);
+                if (!imported)
+                {
+                    Keys(target, "kind", "weights");
+                    if (!System.Object.Equals(Field(target, "kind"), TargetVersion)) throw new FormatException();
+                    object[] weights = Array(Field(target, "weights"));
+                    if (weights.Length != 4) throw new FormatException();
+                    double sum = 0;
+                    foreach (object weight in weights) { double n = Number(weight); if (n < 0) throw new FormatException(); sum += n; }
+                    if (Math.Abs(sum - 1) > 1e-12) throw new FormatException();
+                }
+                else
+                {
+                    Keys(target, "kind", "samples", "sampleRate", "fundamentalHz", "harmonics", "source", "preprocessVersion", "id");
+                    if (!System.Object.Equals(Field(target, "kind"), "periodic-wave-v1") || !System.Object.Equals(Field(target, "preprocessVersion"), "audio-prep-v1") || !(Field(target, "id") is string)) throw new FormatException();
+                    object[] samples = Array(Field(target, "samples"));
+                    if (samples.Length < 2 || samples.Length > 65536) throw new FormatException();
+                    foreach (object sample in samples) Number(sample);
+                    if (Number(Field(target, "sampleRate")) <= 0 || Number(Field(target, "fundamentalHz")) <= 0) throw new FormatException();
+                    Dictionary<string, object> harmonics = Object(Field(target, "harmonics"));
+                    Keys(harmonics, "sin", "cos");
+                    object[] sine = Array(harmonics["sin"]), cosine = Array(harmonics["cos"]);
+                    if (sine.Length < 1 || sine.Length > 32767 || sine.Length != cosine.Length) throw new FormatException();
+                    foreach (object coefficient in sine) Number(coefficient);
+                    foreach (object coefficient in cosine) Number(coefficient);
+                    Object(Field(target, "source"));
+                }
             }
+            if (imported) { object[] targetSet = Array(Field(config, "targetSet")); if (targetSet.Length != 32) throw new FormatException(); }
             object[] cells = Array(Field(table, "cells"));
             if (cells.Length > 1024) throw new FormatException();
         }

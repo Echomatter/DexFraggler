@@ -1,7 +1,9 @@
-export function tableMetrics(cells){
+export function tableMetrics(cells,targets=[]){
  const measured=cells.filter(c=>c.current&&c.native_score!==null&&Number.isFinite(Number(c.native_score)));
  const sum=measured.reduce((total,c)=>total+Number(c.native_score),0);
- return {measured:measured.length,pending:1024-measured.length,tableMatch:sum/1024,measuredMatch:measured.length?sum/measured.length:null,
+ const interpolated=measured.filter(c=>targets[Number(c.id)%32]?.source?.interpolated===true),direct=measured.filter(c=>targets.length&&!targets[Number(c.id)%32]?.source?.interpolated);
+ const mean=group=>group.length?group.reduce((total,c)=>total+Number(c.native_score),0)/group.length:null;
+ return {measured:measured.length,pending:1024-measured.length,tableMatch:sum/1024,measuredMatch:measured.length?sum/measured.length:null,interpolatedMeasured:interpolated.length,directMeasured:direct.length,interpolatedMatch:mean(interpolated),directMatch:mean(direct),
   columns:Array.from({length:32},(_,slot)=>measured.filter(c=>c.id%32===slot).reduce((total,c)=>total+Number(c.native_score),0)/32)};
 }
 /** Equal scores share the midpoint of their ordinal positions. The color range
