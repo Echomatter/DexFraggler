@@ -1,5 +1,8 @@
 import {localUrl} from './local-url.mjs';
 import {TARGET_VERSION,METRIC_VERSION,targetKey} from '../public/targets.mjs';
+import {readNativeDataset} from '../models/native-dataset.mjs';
+import {buildRetrievalIndex,retrieveCandidates} from '../models/retrieval.mjs';
+import {loadPredictor,predictPatch} from '../models/predictor.mjs';
 import {RUNNER_PROTOCOL} from '../public/table-import.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -21,13 +24,14 @@ const numberOrNull=value=>{if(value===null||value===undefined||value==='')return
  * disagreement break ties. This keeps easy interpolated columns from
  * monopolizing candidate proposals after they get a head start.
  */
-export function rankRowSlots(cells,best,now=Date.now()){
+export function rankRowSlots(cells,best,now=Date.now(),targets=[]){
   const bySlot=new Map(cells.map(c=>[Number(c.id)%32,c])),items=Array.from({length:32},(_,slot)=>{
+    const source=targets[slot]?.source,interpolated=source?.interpolated===true;
     const cell=bySlot.get(slot),result=best.get(slot),loss=numberOrNull(result?.loss??cell?.native_loss),model=numberOrNull(cell?.model_score),native=numberOrNull(result?.score??cell?.native_score),visits=Math.max(0,Number(cell?.visits)||0),age=Math.max(0,now-(numberOrNull(cell?.updated_at)??0));
-    return {slot,loss:finite(loss)?Math.max(0,Math.min(1,loss)):1,visits,age,disagreement:finite(model)&&finite(native)?Math.min(1,Math.abs(model-native)*4):0};
+    return {slot,loss:finite(loss)?Math.max(0,Math.min(1,loss)):1,visits,age,interpolated,difficulty:interpolated?0:1,disagreement:finite(model)&&finite(native)?Math.min(1,Math.abs(model-native)*4):0};
   });
   const min=Math.min(...items.map(item=>item.visits)),max=Math.max(...items.map(item=>item.visits)),spread=Math.max(1,max-min);
-  return items.map(item=>({...item,coverage:(max-item.visits)/spread,staleness:Math.min(1,item.age/600000)})).map(item=>({...item,priority:.65*item.loss+.2*item.coverage+.1*item.staleness+.05*item.disagreement})).sort((a,b)=>b.priority-a.priority||b.loss-a.loss||a.visits-b.visits||b.age-a.age||a.slot-b.slot).map(item=>item.slot);
+  return items.map(item=>({...item,coverage:(max-item.visits)/spread,staleness:Math.min(1,item.age/600000)})).map(item=>({...item,priority:.62*item.loss+.18*item.coverage+.1*item.staleness+.05*item.disagreement+.05*item.difficulty})).sort((a,b)=>b.priority-a.priority||b.loss-a.loss||b.difficulty-a.difficulty||a.visits-b.visits||b.age-a.age||a.slot-b.slot).map(item=>item.slot);
 }
 
 export async function atomicJson(filename,value){
@@ -95,7 +99,11 @@ export async function runTableRunner(options={}){
   const log=options.log??console.log,errorLog=options.errorLog??console.error;
   const started=Date.now(),processStartTime=new Date(started-process.uptime()*1000).toISOString();
   const statusFile=path.join(runtimeDir,'runner-status.json'),controlFile=path.join(runtimeDir,'runner-control.json');
-  let reference=createReference(),stopping=false,active=null,failures=0,phase='Starting',cloudRunning=false;
+  let reference=createReference(),stopping=false,active=null,failures=0,phase='Starting',cloudRunning=false,retrievalIndex=null,predictor=null;
+  if(config.retrievalIndexPath)try{
+    const dataset=await readNativeDataset(path.resolve(root,String(config.retrievalIndexPath)));retrievalIndex=buildRetrievalIndex(dataset,{maxRecords:Number(config.retrievalMaxRecords)||100000});
+  }catch(error){errorLog(new Date().toISOString(),'Retrieval index unavailable:',error.message)}
+  if(config.predictorPath)try{predictor=await loadPredictor(path.resolve(root,String(config.predictorPath)))}catch(error){errorLog(new Date().toISOString(),'Predictor unavailable:',error.message)}
   let localPaused=false,priority='BelowNormal',requestedPriority='BelowNormal',priorityError=null;
   let totalEvaluations=0,lastWrite=0,lastHeartbeat=0,ticking=false;
   const changedAt=new Map(),rows=new Map();
@@ -179,7 +187,11 @@ export async function runTableRunner(options={}){
     const add=p=>{if(p?.algorithm===job.algorithm&&!seeds.some(x=>patchKey(x)===patchKey(p)))seeds.push(p)};
     for(const seed of job.seeds??[])add(seed.patch);
     add(state.elites[0]?.patch);add(row.best.get(focus)?.patch);add(cells.get(job.id)?.reference?.patch);add(cells.get(job.id)?.patch);
-    const ranked=rankRowSlots([...cells.values()],row.best);
+    const ranked=rankRowSlots([...cells.values()],row.best,Date.now(),job.targets);
+    if(predictor&&job.config.targetSet&&predictor.algorithm===job.algorithm)try{add(predictPatch(predictor,job.targets[focus]))}catch(error){errorLog(new Date().toISOString(),'Predictor proposal skipped:',error.message)}
+    if(retrievalIndex&&job.config.targetSet){
+      for(const result of retrieveCandidates(retrievalIndex,job.targets[focus],job.algorithm,{limit:Math.min(16,Math.max(1,Number(config.retrievalPerCell)||8))}))add(result.patch);
+    }
     for(const slot of [...job.config.anchors.map(a=>a.slot),...ranked]){add(row.states.get(slot)?.elites[0]?.patch);add(row.best.get(slot)?.patch);if(seeds.length>=10)break}
     // A neighboring pair often gives a useful first proposal for an in-between
     // column. It is a seed, never an assumed solution for that column.

@@ -84,13 +84,15 @@ export function prepareAudio(audio,note){
 function planFor(prepared,target){
   const key=`${prepared.note}:${prepared.n}:${targetKey(target)}`;if(planCache.has(key))return planCache.get(key);
   const {bands:h,n,sinSum,cosSum}=prepared,{sin:b}=coefficients(target,h);
-  const zeros=new Float64Array(h+1),series=Float64Array.from([0,...b]);
-  const squared=squareSeries(zeros,series),meanC=new Float64Array(h+1),meanS=new Float64Array(h+1);
-  for(let k=1;k<=h;k++){meanC[k]=b[k-1]*sinSum[k];meanS[k]=b[k-1]*cosSum[k];}
+  const {cos:a}=coefficients(target,h),seriesC=Float64Array.from([0,...a]),seriesS=Float64Array.from([0,...b]);
+  const squared=squareSeries(seriesC,seriesS),meanC=new Float64Array(h+1),meanS=new Float64Array(h+1);
+  // The imported target can have a non-zero cosine component. Keep both
+  // quadratures so its measured harmonic phase is not silently discarded.
+  for(let k=1;k<=h;k++){meanC[k]=a[k-1]*cosSum[k]+b[k-1]*sinSum[k];meanS[k]=b[k-1]*cosSum[k]-a[k-1]*sinSum[k];}
   const meanSquared=squareSeries(meanC,meanS),energyC=new Float64Array(2*h+1),energyS=new Float64Array(2*h+1);
   for(let k=0;k<=2*h;k++){
-    energyC[k]=squared.cos[k]*cosSum[k]-meanSquared.cos[k]/n;
-    energyS[k]=-squared.cos[k]*sinSum[k]-meanSquared.sin[k]/n;
+    energyC[k]=squared.cos[k]*cosSum[k]+squared.sin[k]*sinSum[k]-meanSquared.cos[k]/n;
+    energyS[k]=squared.sin[k]*cosSum[k]-squared.cos[k]*sinSum[k]-meanSquared.sin[k]/n;
   }
   const energyBounds=bounds(energyC,energyS);
   let gridSize=powerOfTwo(Math.max(128,4*h)),energyGrid=onGrid(energyC,energyS,gridSize);
@@ -98,7 +100,7 @@ function planFor(prepared,target){
   let energyMinimum=Math.min(...energyGrid)-energyBounds[2]*(TAU/gridSize)**2/8;
   while(energyMinimum<=1e-12&&gridSize<65536){gridSize*=2;energyGrid=onGrid(energyC,energyS,gridSize);energyMinimum=Math.min(...energyGrid)-energyBounds[2]*(TAU/gridSize)**2/8;}
   if(energyMinimum<=1e-12)throw Error('The capture is too short for a nondegenerate phase comparison at this pitch.');
-  const plan={b,meanC,meanS,energyC,energyS,energyBounds,energyMinimum,gridSize,energyGrid,projection:projectionInfo(target,prepared.base,SAMPLE_RATE)};
+  const plan={a,b,meanC,meanS,energyC,energyS,energyBounds,energyMinimum,gridSize,energyGrid,projection:projectionInfo(target,prepared.base,SAMPLE_RATE)};
   diagnostics.plans++;return remember(planCache,key,plan,128);
 }
 
@@ -116,7 +118,14 @@ export function scorePrepared(prepared,target,options={}){
   const metadata={note,bands:h,metricVersion:METRIC_VERSION,sampleRate:SAMPLE_RATE,retainedIdealEnergy:plan.projection.retainedEnergy};
   if(energy<1e-12)return {...metadata,score:0,error:1,phase:0,...(preview?{wave:[],target:[],idealTarget:[]}:{})};
   const audioNorm=Math.sqrt(energy),dotC=new Float64Array(h+1),dotS=new Float64Array(h+1);
-  for(let k=1;k<=h;k++){dotC[k]=plan.b[k-1]*moments[(k-1)*2]/audioNorm;dotS[k]=plan.b[k-1]*moments[(k-1)*2+1]/audioNorm;}
+  for(let k=1;k<=h;k++){
+    const targetSin=plan.b[k-1],targetCos=plan.a[k-1],audioSin=moments[(k-1)*2],audioCos=moments[(k-1)*2+1];
+    // Dot(audio, target(theta + phase)) expanded into cos(phase) and
+    // sin(phase) terms. For the old sine-only targets this reduces exactly to
+    // the previous expression.
+    dotC[k]=(audioSin*targetSin+audioCos*targetCos)/audioNorm;
+    dotS[k]=(audioCos*targetSin-audioSin*targetCos)/audioNorm;
+  }
   function at(phase,derivatives=false){
     const ds=Math.sin(phase),dc=Math.cos(phase);let s=0,c=1,dot=0,e=plan.energyC[0],dp=0,dpp=0,ep=0,epp=0;
     for(let k=1;k<=2*h;k++){
@@ -174,7 +183,7 @@ export function scorePrepared(prepared,target,options={}){
     const position=i/511*viewSpan,idx=Math.floor(position),f=position-idx,theta=position*step+phase;
     result.wave.push((audio[idx]*(1-f)+audio[Math.min(idx+1,n-1)]*f-mean)*scale);
     const ds=Math.sin(theta),dc=Math.cos(theta);let projected=0,s=0,c=1;
-    for(let k=1;k<=h;k++){const next=s*dc+c*ds;c=c*dc-s*ds;s=next;projected+=plan.b[k-1]*s;}
+    for(let k=1;k<=h;k++){const next=s*dc+c*ds;c=c*dc-s*ds;s=next;projected+=plan.a[k-1]*c+plan.b[k-1]*s;}
     result.target.push(projected-targetMean);result.idealTarget.push(sample(target,theta));
   }
   return result;

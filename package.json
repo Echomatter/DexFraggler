@@ -13,7 +13,11 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "local": "node scripts/local-app.mjs",
-    "compute": "node runner/background.mjs"
+    "compute": "node runner/background.mjs",
+    "dataset:native": "node scripts/build-native-dataset.mjs",
+    "retrieve:native": "node scripts/retrieve-native-seeds.mjs",
+    "train:predictor": "node scripts/train-predictor.mjs",
+    "infer:predictor": "node scripts/infer-predictor.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

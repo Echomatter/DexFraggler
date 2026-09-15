@@ -12,7 +12,8 @@ export async function scanAction(x:Record<string,unknown>,board:Record<string,un
   let target:Record<string,unknown>;
  if(create){
   if(typeof x.name!=='string'||!x.name.trim()||x.name.trim().length>80)throw Error('Give the scan a name of 1–80 characters.');
-   target={id:crypto.randomUUID(),name:x.name.trim(),config:JSON.stringify(imported?.config??validateConfig(JSON.parse(String(board.config)))),created_at:Date.now()};
+   const nextConfig=imported?.config??(x.config!==undefined?validateConfig(x.config):validateConfig(JSON.parse(String(board.config))));
+   target={id:crypto.randomUUID(),name:x.name.trim(),config:JSON.stringify(nextConfig),created_at:Date.now()};
  }else{
   if(typeof x.scanId!=='string')throw Error('Choose a destination scan.');
   const found=await db.prepare('SELECT * FROM scans WHERE id=?').bind(x.scanId).first();

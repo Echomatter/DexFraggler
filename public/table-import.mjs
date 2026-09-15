@@ -6,7 +6,7 @@ export const RUNNER_PROTOCOL='named-scans-v1';
 export function tableSeeds(table){
  if(!table||table.format!=='dexfraggler-table'||table.version!==4||table.model!==MODEL||table.targetVersion!==TARGET_VERSION||table.metricVersion!==METRIC_VERSION)throw Error('Choose a version 4 DexFraggler table from this engine.');
  const config=validateConfig(table.config),targets=columnTargets(config);
- if(!Array.isArray(table.targets)||table.targets.length!==32||table.targets.some((t,i)=>targetKey(t)!==targetKey(targets[i])))throw Error('Table targets do not match its anchors.');
+ if(!Array.isArray(table.targets)||table.targets.length!==32||table.targets.some((t,i)=>targetKey(t)!==targetKey(targets[i])))throw Error('Table targets do not match its stored target set or anchors.');
  if(!Array.isArray(table.cells)||table.cells.length>1024)throw Error('A table contains at most 1,024 cells.');
  const ids=new Set(),patches=new Map();
  for(const cell of table.cells){

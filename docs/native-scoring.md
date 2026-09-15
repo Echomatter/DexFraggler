@@ -24,7 +24,7 @@ Full ideal energy and retained projection energy are also calculated analyticall
 
 ## Exact phase evaluation
 
-The scorer projects the native samples onto sine and cosine bases once per capture. Dot product, target sum and target squared sum are then finite trigonometric polynomials of phase. Evaluating these polynomials gives the same finite-sample correlation as directly generating every projected target sample, without an interpolated waveform lookup table.
+The scorer projects the native samples onto sine and cosine bases once per capture. Dot product, target sum and target squared sum are then finite trigonometric polynomials of phase. Evaluating these polynomials gives the same finite-sample correlation as directly generating every projected target sample, without an interpolated waveform lookup table. Imported periodic targets retain both sine and cosine coefficients; their phase is rotated analytically with the fitted comparison phase instead of being silently treated as sine-only.
 
 An FFT evaluates an initial phase grid. Adaptive subdivision uses a global second-derivative bound. For endpoint values \(f_a,f_b\), width \(d\), and \(K=Md^2/2\), the endpoint secant plus \(Kt(1-t)\) bounds the correlation above throughout \(0\le t\le1\). Its maximum is \(\max(f_a,f_b)+\max(0,K-|f_b-f_a|)^2/(4K)\), taking the correction as zero when \(K=0\). Retaining the endpoint slope makes this tighter than the former \(\max(f_a,f_b)+Md^2/8\) bound. Only intervals that could improve the best score are subdivided. The stopping tolerance is \(10^{-10}\) in correlation; Newton refinement then improves phase precision. This bound applies in exact arithmetic, with the same separate floating-point allowance in the implementation.
 

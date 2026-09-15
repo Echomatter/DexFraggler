@@ -40,6 +40,10 @@ Native captures and Fourier projections are reused across all 32 targets in a ro
 
 The table scheduler uses a two-lane priority policy: stale or least-visited cells preserve coverage, while every fourth decision can give a materially weak native result one bounded recovery visit. Candidate source columns are ranked by native loss, coverage deficit, age and model/native disagreement, which prevents easy interpolated columns from monopolizing the search. Exact row scores are memoized by patch and target generation, and the proposal cursor resumes beyond persisted model evaluations after a restart.
 
+The local sample workflow at `/sample` accepts single-cycle WAVs, explicit-frame wavetables and sustained pitched samples. It normalizes, aligns, previews and distributes 32 phase-bearing periodic targets, then stores them in a named scan for the same resumable native solve, Listen view and legal SysEx export. Native scoring preserves imported sine/cosine phase, and interpolated source frames are marked in provenance and given a small fairness edge against untouched measured frames during source selection.
+
+Research datasets are local and bounded: `npm run dataset:native -- --table table.json --out native.jsonl --max 256` appends exact legal patches with native harmonic descriptors and optional captured waveforms, while `npm run retrieve:native -- --table table.json --dataset native.jsonl --out seeded-table.json` adds several native-derived proposals without overwriting results. `npm run train:predictor -- --dataset native.jsonl --algorithm 1 --out predictor.json` trains a transparent local proposal checkpoint; all retrieval and predictor candidates are independently remeasured before acceptance.
+
 The model remains approximate; measurements cover the stated pitches and duration. No global-optimality certificate or FM1 hardware comparison is claimed. See `/method`, `docs/native-scoring.md` and `docs/analytic-fitting.md`.
 
 Table progress averages all 1,024 native match scores with unmeasured cells contributing zero. Every cell remains in the search indefinitely. Rank mode orders current cells against one another; equal scores share a rank.

@@ -122,7 +122,7 @@ export function renderWithLevelJacobian(p,n=1024,base=187.5){
 
 export function fft(real,imag,inverse=false){const n=real.length;for(let i=1,j=0;i<n;i++){let b=n>>1;for(;j&b;b>>=1)j^=b;j^=b;if(i<j){[real[i],real[j]]=[real[j],real[i]];[imag[i],imag[j]]=[imag[j],imag[i]]}}for(let len=2;len<=n;len<<=1){const angle=(inverse?TAU:-TAU)/len;const wr0=Math.cos(angle),wi0=Math.sin(angle);for(let start=0;start<n;start+=len){let wr=1,wi=0;for(let j=0;j<len/2;j++){const a=start+j,b=a+len/2,tr=wr*real[b]-wi*imag[b],ti=wr*imag[b]+wi*real[b];real[b]=real[a]-tr;imag[b]=imag[a]-ti;real[a]+=tr;imag[a]+=ti;const next=wr*wr0-wi*wi0;wi=wr*wi0+wi*wr0;wr=next}}}if(inverse)for(let i=0;i<n;i++){real[i]/=n;imag[i]/=n}}
 const targetCache=new Map();
-function requireTarget(target){if(target?.kind!==TARGET_VERSION)throw Error('Use an ideal waveform target.');targetKey(target);return target}
+function requireTarget(target){targetKey(target);return target}
 export function targetWave(target,harmonics=MODEL_HARMONICS,n=1024,base=187.5,phase=0){
   requireTarget(target);
   if(!Number.isInteger(harmonics)||harmonics<1||!Number.isFinite(base)||base<=0)throw Error('Invalid model projection.');
