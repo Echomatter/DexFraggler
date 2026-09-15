@@ -3,15 +3,16 @@ import {tableSeeds} from '@/public/table-import.mjs';
 import {validateConfig} from '@/public/targets.mjs';
 const json=(value:unknown,status=200)=>Response.json(value,{status,headers:{'Cache-Control':'no-store'}});
 const generationGuard='EXISTS(SELECT 1 FROM map_board WHERE id=1 AND generation=?)';
-export async function scanAction(x:Record<string,any>,board:Record<string,any>){
- if(!['new_scan','switch_scan','import_seeds'].includes(x.action))return null;
+export async function scanAction(x:Record<string,unknown>,board:Record<string,unknown>){
+ const action=typeof x.action==='string'?x.action:'';
+ if(!['new_scan','switch_scan','import_seeds'].includes(action))return null;
  if(x.generation!==board.generation)return json({error:'The active scan changed. Reopen the scan dialog and try again.'},409);
- const db=database(),imported=x.action==='import_seeds'?tableSeeds(x.table):null;
- const create=x.action==='new_scan'||(imported&&x.destination==='new');
- let target:Record<string,any>;
+  const db=database(),imported=action==='import_seeds'?tableSeeds(x.table):null;
+ const create=action==='new_scan'||(imported&&x.destination==='new');
+  let target:Record<string,unknown>;
  if(create){
   if(typeof x.name!=='string'||!x.name.trim()||x.name.trim().length>80)throw Error('Give the scan a name of 1–80 characters.');
-  target={id:crypto.randomUUID(),name:x.name.trim(),config:JSON.stringify(imported?.config??validateConfig(JSON.parse(board.config))),created_at:Date.now()};
+   target={id:crypto.randomUUID(),name:x.name.trim(),config:JSON.stringify(imported?.config??validateConfig(JSON.parse(String(board.config)))),created_at:Date.now()};
  }else{
   if(typeof x.scanId!=='string')throw Error('Choose a destination scan.');
   const found=await db.prepare('SELECT * FROM scans WHERE id=?').bind(x.scanId).first();

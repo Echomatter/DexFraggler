@@ -6,6 +6,11 @@ import {MODEL,validatePatch,blank} from '@/public/core.mjs';
 import {TARGET_VERSION,METRIC_VERSION,DEFAULT_CONFIG,validateConfig,columnTargets,targetKey,scheduleCell} from '@/public/targets.mjs';
 export const dynamic='force-dynamic';
 type Row=Record<string,unknown>;
+type Elite={patch:unknown;loss:number;score:number};
+type OptimizerState={model:string;algorithm:number;shape:unknown;harmonics:number;allowDetune:boolean;evaluations:number;elites:Elite[];history:unknown[]};
+type NativeNote={note:number;score:number;error:number;wave:number[];target:number[];idealTarget:number[];bands:number;phase:number;metricVersion:string};
+type NativeReference={patch:unknown;engine:string;metricVersion:string;loss:number;score:number;notes:NativeNote[]};
+type Checkpoint={id:unknown;state:OptimizerState;reference:NativeReference|null;visited?:unknown};
 const json=(v:unknown,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store'}});
 const parse=(v:unknown)=>v?JSON.parse(String(v)):null;
 async function auth(req:Request){
@@ -17,18 +22,18 @@ function cellId(v:unknown){if(!Number.isInteger(v)||Number(v)<0||Number(v)>1023)
 function rowPatch(raw:unknown,id:number){const p=validatePatch(raw);if(p.algorithm!==Math.floor(id/32)+1)throw Error('A patch must use the cell’s row algorithm.');return p}
 function workerId(v:unknown){if(typeof v!=='string'||!v.trim()||v.length>150)throw Error('Invalid worker.');return v}
 async function summaries(scanId:unknown){return (await database().prepare('SELECT id,target_key,visits,evaluations,model_score,native_score,native_loss,updated_at,revision,failed_until,last_error FROM map_cells WHERE scan_id=?').bind(scanId).all()).results}
-function owned(b:Row,x:{id:unknown;worker:unknown;generation:unknown}){return !!b.running&&b.active_id===x.id&&b.lease_owner===x.worker&&b.generation===x.generation&&Number(b.lease_until)>Date.now()}
+function owned(b:Row,x:Row){return !!b.running&&b.active_id===x.id&&b.lease_owner===x.worker&&b.generation===x.generation&&Number(b.lease_until)>Date.now()}
 const guard='EXISTS(SELECT 1 FROM map_board WHERE id=1 AND lease_owner=? AND generation=? AND running=1 AND active_id=? AND lease_until>?)';
 async function heartbeat(worker:string,status:Record<string,unknown>={}){const engine=JSON.stringify({engine:'Dexed Mark I',priority:String(status.priority??'BelowNormal').slice(0,20),phase:String(status.phase??'Scanning').slice(0,80),localPaused:status.localPaused===true,cellsPerMinute:Math.max(0,Math.min(100000,Number(status.cellsPerMinute)||0))});await database().prepare('INSERT INTO workers(id,last_seen,engine) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET last_seen=excluded.last_seen,engine=excluded.engine').bind(worker,Date.now(),engine).run()}
-function validateCheckpoint(x:Record<string,any>,id:number,config:Record<string,any>,key:string,old:Row|undefined){
+function validateCheckpoint(x:Checkpoint,id:number,config:Record<string,unknown>,key:string,old:Row|undefined){
  if(x.reference===null&&old?.target_key!==key)throw Error('An unchanged measurement must belong to the current target.');
- const s=x.state,r=x.reference===null?parse(old?.reference):x.reference;
+  const s=x.state,r=(x.reference===null?parse(old?.reference):x.reference) as NativeReference;
  if(!s||s.model!==MODEL||s.algorithm!==Math.floor(id/32)+1||targetKey(s.shape)!==key||s.harmonics!==127||s.allowDetune!==config.allowDetune||!Number.isSafeInteger(s.evaluations)||s.evaluations<1||!Array.isArray(s.elites)||s.elites.length<1||s.elites.length>16||!Array.isArray(s.history)||s.history.length>120)throw Error('Invalid cell checkpoint.');
- for(const e of s.elites){rowPatch(e.patch,id);if(!Number.isFinite(e.loss)||e.loss<0||e.loss>5||!Number.isFinite(e.score)||e.score<0||e.score>1)throw Error('Invalid candidate score.')}
- if(s.elites.some((e:{loss:number})=>e.loss<s.elites[0].loss))throw Error('The best candidate must come first.');
+  for(const e of s.elites){rowPatch(e.patch,id);if(!Number.isFinite(e.loss)||e.loss<0||e.loss>5||!Number.isFinite(e.score)||e.score<0||e.score>1)throw Error('Invalid candidate score.')}
+  if(s.elites.some(e=>e.loss<s.elites[0].loss))throw Error('The best candidate must come first.');
  rowPatch(r?.patch,id);
- if(r.engine!=='Dexed Mark I / native'||r.metricVersion!==METRIC_VERSION||!Number.isFinite(r.loss)||r.loss<0||r.loss>1||!Number.isFinite(r.score)||r.score<0||r.score>1||!Array.isArray(r.notes)||r.notes.length!==3||!r.notes.every((n:{note:number;score:number;error:number;wave:number[];target:number[];idealTarget:number[];bands:number;phase:number;metricVersion:string},i:number)=>n.note===[45,57,69][i]&&n.metricVersion===METRIC_VERSION&&n.bands===[218,109,54][i]&&Number.isFinite(n.phase)&&Number.isFinite(n.score)&&n.score>=0&&n.score<=1&&Number.isFinite(n.error)&&n.error>=0&&n.error<=1&&Array.isArray(n.wave)&&Array.isArray(n.target)&&Array.isArray(n.idealTarget)&&n.idealTarget.length===n.wave.length&&n.wave.length<=512&&n.target.length===n.wave.length&&[...n.wave,...n.target,...n.idealTarget].every(Number.isFinite)))throw Error('Invalid native measurement.');
- if(Math.abs(r.score-Math.min(...r.notes.map((n:{score:number})=>n.score)))>1e-12||Math.abs(r.loss-Math.max(...r.notes.map((n:{error:number})=>n.error*n.error)))>1e-12)throw Error('Native measurement totals must agree with the notes.');
+  if(r.engine!=='Dexed Mark I / native'||r.metricVersion!==METRIC_VERSION||!Number.isFinite(r.loss)||r.loss<0||r.loss>1||!Number.isFinite(r.score)||r.score<0||r.score>1||!Array.isArray(r.notes)||r.notes.length!==3||!r.notes.every((n,i)=>n.note===[45,57,69][i]&&n.metricVersion===METRIC_VERSION&&n.bands===[218,109,54][i]&&Number.isFinite(n.phase)&&Number.isFinite(n.score)&&n.score>=0&&n.score<=1&&Number.isFinite(n.error)&&n.error>=0&&n.error<=1&&Array.isArray(n.wave)&&Array.isArray(n.target)&&Array.isArray(n.idealTarget)&&n.idealTarget.length===n.wave.length&&n.wave.length<=512&&n.target.length===n.wave.length&&[...n.wave,...n.target,...n.idealTarget].every(Number.isFinite)))throw Error('Invalid native measurement.');
+  if(Math.abs(r.score-Math.min(...r.notes.map(n=>n.score)))>1e-12||Math.abs(r.loss-Math.max(...r.notes.map(n=>n.error*n.error)))>1e-12)throw Error('Native measurement totals must agree with the notes.');
  const current=old?.target_key===key,oldState=parse(old?.state);
  if(current&&(s.evaluations<Number(old?.evaluations)||s.evaluations>Number(old?.evaluations)+100000||(oldState&&s.elites[0].loss>oldState.elites[0].loss+1e-12)||(old?.native_loss!==null&&r.loss>Number(old?.native_loss)+1e-12)))throw Error('A checkpoint cannot discard a better solution.');
  return {s,r,current};
@@ -55,9 +60,9 @@ export async function POST(req:Request){try{
  const origin=req.headers.get('origin');if(origin&&origin!==new URL(req.url).origin)return json({error:'Origin is not allowed.'},403);
  if(Number(req.headers.get('content-length'))>4000000)return json({error:'Send a smaller batch.'},413);
  const text=await req.text();if(text.length>4000000)return json({error:'Send a smaller batch.'},413);
- const x=JSON.parse(text),db=database(),b=await board(),config=parse(b.config);
+  const x=JSON.parse(text) as Record<string,unknown>,db=database(),b=await board(),config=parse(b.config) as Record<string,unknown>;
  const scanResponse=await scanAction(x,b);if(scanResponse)return scanResponse;
- if(x.action==='heartbeat'){await heartbeat(workerId(x.worker),x.status);return json({ok:true})}
+  if(x.action==='heartbeat'){await heartbeat(workerId(x.worker),x.status as Record<string,unknown>);return json({ok:true})}
  if(x.action==='running'){if(typeof x.running!=='boolean')throw Error('Running must be true or false.');await db.prepare('UPDATE map_board SET running=?,revision=revision+1,lease_owner=NULL,lease_until=0,active_id=NULL WHERE id=1').bind(x.running?1:0).run();return json({ok:true})}
  if(x.action==='configure'){const next=validateConfig(x.config);columnTargets(next);if(x.revision!==b.revision)return json({error:'Table changed; reload before changing anchors.'},409);const r=await db.prepare('UPDATE map_board SET config=?,generation=generation+1,revision=revision+1,lease_owner=NULL,lease_until=0,active_id=NULL WHERE id=1 AND revision=?').bind(JSON.stringify(next),b.revision).run();return r.meta.changes?json({ok:true}):json({error:'Table changed; reload.'},409)}
  const targets=columnTargets(config),keys=targets.map(targetKey);
@@ -66,9 +71,9 @@ export async function POST(req:Request){try{
   const r=await db.prepare('UPDATE map_board SET lease_until=? WHERE id=1 AND '+guard).bind(Date.now()+120000,x.worker,x.generation,x.id,Date.now()).run();
   return r.meta.changes?json({ok:true,running:true}):json({error:'This search batch was superseded.'},409);
  }
- if(x.action==='claim_row'){
+  if(x.action==='claim_row'){
   if(x.protocol!==RUNNER_PROTOCOL||x.model!==MODEL||x.targetVersion!==TARGET_VERSION||x.metricVersion!==METRIC_VERSION)return json({error:'Restart DexFraggler to load the current search engine.'},409);
-  workerId(x.worker);await heartbeat('Windows tray runner',x.status);
+   workerId(x.worker);await heartbeat('Windows tray runner',x.status as Record<string,unknown>);
   if(!b.running||Number(b.lease_until)>Date.now())return json({job:null,running:!!b.running});
   const pending=(await db.prepare('SELECT DISTINCT cell_id FROM scan_seeds WHERE scan_id=? ORDER BY cell_id').bind(b.scan_id).all()).results;
   const rows=await summaries(b.scan_id),blocked=new Set(rows.filter(c=>Number(c.failed_until)>Date.now()).map(c=>Number(c.id)));
@@ -83,10 +88,10 @@ export async function POST(req:Request){try{
   const focus=cellId(x.id);if(!owned(b,x))return json({error:'This search batch was superseded.'},409);
   const batch=x.cells;
   if(!Array.isArray(batch)||batch.length<1||batch.length>32)throw Error('Checkpoint 1–32 cells in one algorithm row.');
-  const ids=batch.map((c:{id:unknown})=>cellId(c.id));if(new Set(ids).size!==ids.length||ids.some(id=>Math.floor(id/32)!==Math.floor(focus/32)))throw Error('Checkpoint cells must be unique and in the active row.');
+  const ids=batch.map((raw:unknown)=>cellId((raw as Record<string,unknown>).id));if(new Set(ids).size!==ids.length||ids.some(id=>Math.floor(id/32)!==Math.floor(focus/32)))throw Error('Checkpoint cells must be unique and in the active row.');
   const first=Math.floor(focus/32)*32,oldRows=(await db.prepare('SELECT * FROM map_cells WHERE scan_id=? AND id>=? AND id<?').bind(b.scan_id,first,first+32).all()).results;
-  const now=Date.now(),statements=batch.map((c:Record<string,any>)=>{
-   const id=cellId(c.id),old=oldRows.find(row=>row.id===id),{s,r,current}=validateCheckpoint(c,id,config,keys[id%32],old);
+  const now=Date.now(),statements=batch.map((raw:unknown)=>{
+   const c=raw as Checkpoint,id=cellId(c.id),old=oldRows.find(row=>row.id===id),{s,r,current}=validateCheckpoint(c,id,config,keys[id%32],old);
    if(c.visited!==undefined&&typeof c.visited!=='boolean')throw Error('Invalid visit flag.');
    return db.prepare('INSERT INTO map_cells(scan_id,id,patch,state,reference,target_key,visits,evaluations,model_score,native_score,native_loss,updated_at,revision) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,1 WHERE '+guard+' ON CONFLICT(scan_id,id) DO UPDATE SET patch=excluded.patch,state=excluded.state,reference=COALESCE(excluded.reference,map_cells.reference),target_key=excluded.target_key,visits=excluded.visits,evaluations=excluded.evaluations,model_score=excluded.model_score,native_score=excluded.native_score,native_loss=excluded.native_loss,updated_at=excluded.updated_at,revision=map_cells.revision+1,failed_until=0,last_error=NULL').bind(b.scan_id,id,JSON.stringify(s.elites[0].patch),JSON.stringify(s),c.reference===null?null:JSON.stringify(r),keys[id%32],(current?Number(old?.visits):0)+(c.visited?1:0),s.evaluations,String(s.elites[0].score),String(r.score),String(r.loss),now,x.worker,x.generation,focus,now);
   });
