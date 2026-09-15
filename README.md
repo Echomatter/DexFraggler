@@ -1,6 +1,28 @@
 # DexFraggler
 
-A research prototype for finding DX7 patches that approximate ideal waveform blends: a 32-algorithm × 32-slice table, a persistent Windows tray runner, and a standalone calculation library. This is a foundation for a future wavetable-remix VST using Dexed.
+A computed DX7 waveform-bank instrument and research workbench. DexFraggler keeps the existing 32-algorithm × 32-slice native search, then adds a format-neutral playback core that can interpolate across cells, rows, columns, and whole waveform banks. Native DX7 rendering rebuilds table cells off the audio thread; JUCE/VST3, LV2, and AUv3 are host translations of the same playback engine.
+
+The canonical code repository is [Echomatter/DexFraggler](https://github.com/Echomatter/DexFraggler). “DexFraggler” is the product and repository name; Dexed/DX7 names describe the compatible engine lineage and file formats, not the product identity.
+
+## Plugin architecture
+
+The plugin work is under [`plugin/`](plugin/). [`plugin/include/dexfraggler/WaveformTable.h`](plugin/include/dexfraggler/WaveformTable.h) owns the new bank/cell contract, [`RealtimeEngine.h`](plugin/include/dexfraggler/RealtimeEngine.h) is the allocation-free voice layer, and the host adapters are deliberately thin:
+
+- JUCE builds VST3 and standalone on Windows/Linux and adds AUv3 on Apple platforms.
+- LV2 uses the native LV2 atom/MIDI contract and the same realtime engine.
+- [`DexFragglerTableTool`](plugin/tools/TableBuilderMain.cpp) rebuilds cells through the native Dexed Mark I renderer and writes portable `.dfwt` tables.
+
+The table is not a 32-program DX7 cartridge. It is a three-dimensional resource: `bank × row × column`, with cyclic phase inside every cell. Modulation routes can target any of those axes or phase, so a wheel, pitch bend, aftertouch, expression, or velocity can move through the table in any direction.
+
+Build the format-neutral core and bounded native tests with CMake:
+
+```powershell
+cmake -S . -B plugin-build -DDEXFRAGGLER_BUILD_JUCE=OFF -DDEXFRAGGLER_BUILD_LV2=OFF
+cmake --build plugin-build --config Release --parallel 4
+ctest --test-dir plugin-build -C Release --output-on-failure
+```
+
+For JUCE/VST3 (and AUv3 on macOS with the Xcode generator), use `powershell -File scripts/build-plugin.ps1 -WithJuce` on Windows or configure CMake with `-G Xcode` on macOS. The script downloads the pinned JUCE 7.0.12 checkout into the ignored `plugin/third_party/JUCE` directory. LV2 builds require the platform's LV2 development headers; add `-WithLv2` on Windows only when those headers are available, or configure `-DDEXFRAGGLER_LV2_INCLUDE_DIR=...` directly.
 
 ## Run the calculation models
 
@@ -16,7 +38,7 @@ node scripts/model-lab.mjs corpus --table downloaded-table.json --out research-c
 
 The native command uses the included Windows executable. Set `DEXFRAGGLER_NATIVE_EXE` to use a separately built renderer. Import `models/index.mjs` to use waveform formulas, the smooth renderer, analytic derivatives, fitting and SysEx codecs in another program. See [calculation models and VST development path](docs/calculation-models.md), [native build instructions](native/README.md), and the [performance review](docs/performance-review-2026-09-14.md).
 
-The project is a prototype, not a VST. Its local predictor is an optional proposal aid, never a substitute for native verification. The native wrapper and combined engine are GPL-3.0-or-later; bundled third-party notices and source provenance are under `native/`.
+The search/predictor remains a research aid, never a substitute for native verification. The plugin core is now a buildable foundation, while host package discovery, real-time performance, and listening remain explicit validation gates. The native wrapper and combined engine are GPL-3.0-or-later; bundled third-party notices and source provenance are under `native/`.
 
 ## Table and desktop app
 

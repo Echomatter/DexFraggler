@@ -47,6 +47,8 @@ next-env.d.ts
 
 /.runtime/
 /native/build/
+/plugin/third_party/JUCE/
+/plugin-build/
 *.log
 
 *.tsbuildinfo

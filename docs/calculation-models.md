@@ -1,6 +1,6 @@
 # Reusing the calculation models
 
-DexFraggler is an offline patch-search prototype for a future wavetable-remix instrument using Dexed. It currently produces legal static DX7 patches and measured matches to ideal waveform blends. It does not yet provide a VST, a trained predictor, or an audio-thread-safe optimizer.
+DexFraggler's calculation library remains an offline patch-search and native-measurement layer. It produces legal static DX7 patches and measured matches to ideal waveform blends; the new plugin layer turns selected native results into computed waveform-table cells. It does not claim that the predictor is an optimizer or that a model score is hardware equivalence.
 
 The calculation library has no npm dependencies or Site credentials. Clone the repository and use Node.js 22.13 or newer:
 

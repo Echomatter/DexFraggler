@@ -1,6 +1,6 @@
 {
   "name": "dexfraggler",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -19,7 +19,9 @@
     "train:predictor": "node scripts/train-predictor.mjs",
     "infer:predictor": "node scripts/infer-predictor.mjs",
     "benchmark:sample": "node scripts/benchmark-sample-pipeline.mjs",
-    "smoke:sample": "node scripts/smoke-sample-to-dx7.mjs"
+    "smoke:sample": "node scripts/smoke-sample-to-dx7.mjs",
+    "plugin:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-plugin.ps1",
+    "plugin:build:juce": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-plugin.ps1 -WithJuce"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

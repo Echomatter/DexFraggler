@@ -3,6 +3,18 @@ on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
 jobs:
+  plugin-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LV2 development headers
+        run: sudo apt-get update && sudo apt-get install -y liblv2-dev pkg-config
+      - name: Configure shared waveform core and LV2 adapter
+        run: cmake -S . -B plugin-build -DDEXFRAGGLER_BUILD_JUCE=OFF -DDEXFRAGGLER_BUILD_LV2=ON
+      - name: Build shared core and table tool
+        run: cmake --build plugin-build --config Release --parallel 2
+      - name: Run native waveform-table tests
+        run: ctest --test-dir plugin-build --build-config Release --output-on-failure
   web-build:
     runs-on: ubuntu-latest
     steps:
@@ -34,3 +46,25 @@ jobs:
           node --test tests/*.test.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/model-lab.mjs score --native --out native-example.json
+  plugin-juce-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned JUCE source
+        shell: pwsh
+        run: git clone --depth 1 --branch 7.0.12 https://github.com/juce-framework/JUCE.git plugin/third_party/JUCE
+      - name: Configure JUCE/VST3 build
+        shell: pwsh
+        run: cmake -S . -B plugin-build -A x64 -DDEXFRAGGLER_BUILD_JUCE=ON -DDEXFRAGGLER_BUILD_LV2=OFF -DJUCE_ROOT=$PWD/plugin/third_party/JUCE
+      - name: Build JUCE/VST3 adapter
+        run: cmake --build plugin-build --config Release --parallel 2
+  plugin-juce-macos:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned JUCE source
+        run: git clone --depth 1 --branch 7.0.12 https://github.com/juce-framework/JUCE.git plugin/third_party/JUCE
+      - name: Configure JUCE/VST3/AUv3 with Xcode
+        run: cmake -G Xcode -S . -B plugin-build -DDEXFRAGGLER_BUILD_JUCE=ON -DDEXFRAGGLER_BUILD_LV2=OFF -DJUCE_ROOT=$PWD/plugin/third_party/JUCE
+      - name: Build JUCE formats
+        run: cmake --build plugin-build --config Release --parallel 2
