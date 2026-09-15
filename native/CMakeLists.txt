@@ -11,6 +11,7 @@ add_library(dexfraggler_dx7_engine STATIC
     vendor/third_party/dx7/EngineMkI.cpp
     vendor/third_party/dx7/msfa/porta.cpp ${DX7_MSFA})
 add_library(dx7_reference ALIAS dexfraggler_dx7_engine)
+set_target_properties(dexfraggler_dx7_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(dexfraggler_dx7_engine PUBLIC vendor/Source PRIVATE vendor/third_party/dx7)
 target_compile_definitions(dexfraggler_dx7_engine PUBLIC _USE_MATH_DEFINES NOMINMAX)
 if(MSVC)
