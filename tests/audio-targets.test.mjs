@@ -27,6 +27,12 @@ test('wavetable imports require an explicit frame boundary when metadata is insu
  const prepared=prepareAudio(bytes,{mode:'wavetable',frameSize:16,outputSize:32});assert.equal(prepared.frames.length,3);assert.equal(prepared.targets.length,32);assert.equal(prepared.targets[0].source.frameIndex,0);assert.equal(prepared.targets.at(-1).source.frameIndex,31);assert.ok(prepared.targets.some(target=>target.source.interpolated));
 });
 
+test('large wavetable files avoid argument-spread overflow during WAV statistics',()=>{
+ const bytes=wav16(Array.from({length:100000},(_,i)=>Math.sin(2*Math.PI*i/256)));
+ const parsed=prepareAudio(bytes,{mode:'wavetable',frameSize:1000,frameCount:100,outputSize:64});
+ assert.equal(parsed.frames.length,100);assert.equal(parsed.targets.length,32);assert.ok(parsed.warnings.length>=0);
+});
+
 test('pitched-sample preparation extracts repeated pitch-aware cycles instead of chopping arbitrary samples',()=>{
  const sampleRate=48000,fundamental=220,samples=Array.from({length:sampleRate},(_,i)=>.8*Math.sin(2*Math.PI*fundamental*i/sampleRate));
  const prepared=prepareAudio(wav16(samples,sampleRate),{mode:'pitched-sample',fundamentalHz:fundamental,frameSize:128,cycles:8,outputSize:128});

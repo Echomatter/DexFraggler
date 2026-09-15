@@ -18,7 +18,8 @@
     "retrieve:native": "node scripts/retrieve-native-seeds.mjs",
     "train:predictor": "node scripts/train-predictor.mjs",
     "infer:predictor": "node scripts/infer-predictor.mjs",
-    "benchmark:sample": "node scripts/benchmark-sample-pipeline.mjs"
+    "benchmark:sample": "node scripts/benchmark-sample-pipeline.mjs",
+    "smoke:sample": "node scripts/smoke-sample-to-dx7.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

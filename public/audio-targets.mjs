@@ -73,7 +73,7 @@ export function parseWav(input){
     offset=start+size+(size&1);
   }
   if(!format)throw Error('The WAV has no format chunk.');if(!data)throw Error('The WAV has no audio data chunk.');
-  const samples=decodeSamples(bytes,data.start,data.end,format),peak=Math.max(...samples.map(value=>Math.abs(value))),mean=samples.reduce((sum,value)=>sum+value,0)/Math.max(1,samples.length);
+  const samples=decodeSamples(bytes,data.start,data.end,format);let peak=0,meanSum=0;for(const value of samples){peak=Math.max(peak,Math.abs(value));meanSum+=value}const mean=meanSum/Math.max(1,samples.length);
   const metadata={...info};
   const frameSize=Number(info.frameSize??info.framesize??info.wavetableFrameSize??info.wavetableframesize),frameCount=Number(info.frameCount??info.framecount??info.wavetableFrames??info.wavetableframes);
   if(Number.isInteger(frameSize)&&frameSize>0)metadata.frameSize=frameSize;if(Number.isInteger(frameCount)&&frameCount>0)metadata.frameCount=frameCount;

@@ -28,7 +28,7 @@ npm run build
 npm run local
 ```
 
-Open http://127.0.0.1:5173. The app binds to this computer only and needs no account or cloud credentials. On Windows, launch the tray app below to start the background solver. `npm run compute` starts the same solver from a terminal and starts the local server if needed. Keep only one solver running per checkout.
+Open http://127.0.0.1:5173. The app binds to this computer only and needs no account or cloud credentials. On Windows, launch the tray app below to start the background solver. `npm run compute` starts the same solver from a terminal and starts the local server if needed. Keep only one solver running per checkout. For a bounded local sample check that never changes a named scan, run `npm run smoke:sample -- --input "C:\\path\\sample.wav" --mode wavetable --frame-size 2048 --frame-count 256`.
 
 Set waveform anchors on any column. Columns linearly blend exact unit-peak sine, triangle, square and saw formulas. Ideal targets never come from measured results. Rows keep their algorithm fixed while tuning, levels and feedback are optimized. Click a cell to inspect it; open Cell details for measurements, operators, routing and patch download.
 
