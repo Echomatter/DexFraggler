@@ -58,7 +58,7 @@ LV2_Handle instantiate(const LV2_Descriptor*, double rate, const char*, const LV
             if (current->URI != nullptr && std::string(current->URI) == LV2_URID__map) {
                 const auto* map = static_cast<const LV2_URID_Map*>(current->data);
                 if (map != nullptr && map->map != nullptr)
-                    instance->midiEvent = map->map(map->handle, LV2_MIDI__Midi);
+                    instance->midiEvent = map->map(map->handle, LV2_MIDI__MidiEvent);
             }
         }
     }
