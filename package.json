@@ -17,7 +17,8 @@
     "dataset:native": "node scripts/build-native-dataset.mjs",
     "retrieve:native": "node scripts/retrieve-native-seeds.mjs",
     "train:predictor": "node scripts/train-predictor.mjs",
-    "infer:predictor": "node scripts/infer-predictor.mjs"
+    "infer:predictor": "node scripts/infer-predictor.mjs",
+    "benchmark:sample": "node scripts/benchmark-sample-pipeline.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
