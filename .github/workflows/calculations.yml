@@ -61,7 +61,7 @@ jobs:
       - name: Build JUCE/VST3 adapter
         run: cmake --build plugin-build --config Release --parallel 2
   plugin-juce-macos:
-    runs-on: macos-13
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - name: Fetch pinned JUCE source
