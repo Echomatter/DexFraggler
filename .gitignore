@@ -10,3 +10,5 @@ runs/
 *.egg-info/
 .runtime/
 dexfrag.egg-info/
+
+native/smoke-result.json
