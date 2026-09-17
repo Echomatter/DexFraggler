@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+datasets/*.parquet
+datasets/*.jsonl
+experiments/
+checkpoints/*.pt
+runs/
+*.egg-info/
+.runtime/
+dexfrag.egg-info/

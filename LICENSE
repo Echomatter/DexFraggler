@@ -1,0 +1,15 @@
+GNU GENERAL PUBLIC LICENSE v3.0-or-later
+
+DexFraggler ML rebuild wraps and redistributes the vendored Dexed Mark I /
+WaveFinder native renderer, which is licensed GPL-3.0-or-later (with parts
+dual-licensed Apache-2.0 — see native/licenses/). Because the combined
+executable links GPL-licensed code, this repository's native integration
+and CLI are distributed under GPL-3.0-or-later.
+
+The full license text is at native/licenses/LICENSE-GPL-3.0.
+
+The Python research code (models, search, data pipeline) is original work
+in this repository and is likewise made available under GPL-3.0-or-later
+to keep one consistent license for the combined system. See
+native/licenses/THIRD_PARTY_DX7_README.md and native/source-provenance.json
+for exact upstream provenance and file-level attribution.

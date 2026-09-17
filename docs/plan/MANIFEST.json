@@ -1,0 +1,36 @@
+{
+  "pack_name": "DexFraggler ML + Structured Search Rebuild",
+  "generated_date": "2026-09-16",
+  "recovered_original_pack": true,
+  "files": [
+    "00_MASTER_OVERVIEW.md",
+    "01_PHASE_1_FOUNDATION_STRUCTURE.md",
+    "02_PHASE_2_ACQUISITION.md",
+    "03_PHASE_3_FORWARD_MODEL.md",
+    "04_PHASE_4_INVERSE_PROPOSER.md",
+    "05_PHASE_5_COMPATIBILITY_STRUCTURED_SEARCH.md",
+    "06_PHASE_6_ACTIVE_LEARNING_REACHABILITY.md",
+    "07_PHASE_7_FULL_WAVETABLE.md",
+    "ARCHITECTURE.md",
+    "AUDIT_CHECKLIST.md",
+    "CODEX_HANDOFF_PROMPT.md",
+    "FULL_CODEX_GOAL_PROMPT.md",
+    "OPERATOR_ROADMAP.md",
+    "START_HERE_USER_GUIDE.md"
+  ],
+  "original_files": [
+    "00_MASTER_OVERVIEW.md",
+    "01_PHASE_1_FOUNDATION.md",
+    "02_PHASE_2_ACQUISITION.md",
+    "03_PHASE_3_FORWARD_MODEL.md",
+    "04_PHASE_4_INVERSE_PROPOSER.md",
+    "05_PHASE_5_ACTIVE_LEARNING_WAVETABLE.md",
+    "AUDIT_CHECKLIST.md",
+    "OPERATOR_ROADMAP.md"
+  ],
+  "notes": [
+    "Original 5-phase pack preserved under _original_recovered_pack.",
+    "Rebuild adds structural reduction, compatibility scoring, AZDecrypt-style nested search, reachability estimation, black-box hard-target curriculum, and joint 256-frame budget allocation.",
+    "No generator provenance is allowed as model/search input."
+  ]
+}

@@ -1,0 +1,31 @@
+[project]
+name = "dexfrag"
+version = "0.1.0"
+description = "DexFraggler ML + structured search research system (Python/PyTorch)."
+requires-python = ">=3.12"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+dependencies = [
+  "numpy>=2.0",
+  "scipy>=1.14",
+  "pyarrow>=17.0",
+  "tensorboard>=2.18",
+  "typer>=0.12",
+]
+
+[project.optional-dependencies]
+torch = ["torch"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+dexfrag = "dexfrag.cli:app"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
