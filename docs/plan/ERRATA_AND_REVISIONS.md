@@ -74,21 +74,36 @@ scale to Phase 2's full acquisition target; Phase 2 must shard by file
 before doing high-volume collection. **This is an open item for whoever
 implements Phase 2**, not resolved here.
 
-## 4. Still open / deferred to their owning phase (not resolved by Phase 0)
+## 4. Phase 2 design questions — now pinned down (see docs/plan/PHASE_2_REPORT.md)
+
+The two Phase 2 design questions flagged as open in the original review are
+now **resolved and implemented**:
+
+- **Dataset split strategy**: every observation carries a *split key* — its
+  own `patch_key` if independently sampled, or its **lineage root's**
+  `patch_key` if mutation-derived, so an entire mutation family always lands
+  in exactly one split. Split assignment is a stable SHA-256 hash of the
+  split key mapped to `[0, 1)` and bucketed by cumulative ratio
+  (default 90/5/5 train/validation/test); test/validation claim the low end
+  of the hash space first so ratio changes never reshuffle existing rows. A
+  separate, independently-salted `benchmark_holdout()` flag marks a small
+  (default 2%) structural-family holdout fully excluded from training, for a
+  stricter generalization benchmark. Implemented in `src/dexfrag/splits.py`,
+  tested in `tests/test_splits.py`.
+- **Native-render budget/accounting**: a persistent JSON ledger
+  (`<dataset>.budget.json`) tracks cumulative renders attempted/valid,
+  elapsed seconds, and dataset disk bytes across resumable sessions, and is
+  checked before every render so a caller-specified cap (count/time/disk)
+  is never exceeded, even by one unit. Implemented in `src/dexfrag/budget.py`,
+  tested in `tests/test_budget.py`, and exercised end-to-end by the real
+  64-observation bounded smoke collection (see the Phase 2 report).
+
+## 5. Still open / deferred to their owning phase (not resolved yet)
 
 These were flagged in the original plan review and are **intentionally not
 decided yet** — they require design work at the start of their respective
-phase, informed by data Phase 0 does not produce:
+phase, informed by data earlier phases do not produce:
 
-- **Dataset split strategy** (Phase 2): the pack does not specify how
-  train/val/test splits stay stable as data accumulates incrementally.
-  Recommendation carried forward: immutable hash-based assignment on
-  `patch_key` (already implemented, see `patch.py::patch_key`) plus explicit
-  lineage/family grouping so that near-duplicate patches don't leak across
-  splits. Not implemented — Phase 2's responsibility.
-- **Native render budget/accounting** (Phase 2): the pack references
-  compute budgets for native calls without a ledger mechanism. Needs a
-  counter/quota implementation before large-scale collection begins.
 - **Inverse-proposer training objective** (Phase 4): the pack describes the
   proposer's role but not its loss function precisely enough to implement
   without ambiguity (single best patch vs. distribution vs. top-k
@@ -101,7 +116,7 @@ phase, informed by data Phase 0 does not produce:
   native-render throughput once Phase 2 has run for a while — premature to
   fix now.
 
-## 5. Environment / reproducibility notes
+## 6. Environment / reproducibility notes
 
 - No C/C++ build toolchain (cmake, MSVC Build Tools) was available in this
   environment; the native renderer is vendored as a prebuilt binary with

@@ -39,9 +39,12 @@ NATIVE_OBSERVATION_SCHEMA = pa.schema([
     pa.field("canonical_frames_json", pa.string()),  # per-note CanonicalFrame.to_dict()
     pa.field("waveforms_json", pa.string(), nullable=True),  # raw 4096-sample captures, optional
     pa.field("acquisition_source", pa.string()),
-    pa.field("parent_key", pa.string(), nullable=True),  # mutation lineage
-    pa.field("validity_class", pa.string()),  # valid | silent | near_silent | clipped | unstable | render_failure
+    pa.field("parent_key", pa.string(), nullable=True),  # mutation lineage (immediate parent)
+    pa.field("lineage_root_key", pa.string()),  # split.py's split key: family root patch_key
+    pa.field("validity_class", pa.string()),  # valid | silent | near_silent | clipped | unstable
     pa.field("split", pa.string()),  # train | validation | test
+    pa.field("benchmark_holdout", pa.bool_()),  # stricter structural-family holdout (splits.benchmark_holdout)
+    pa.field("split_scheme_version", pa.string()),
     pa.field("created_at", pa.float64()),
 ])
 
@@ -112,13 +115,15 @@ def append_observations(path: Path | str, rows: list[dict]) -> pa.Table:
 
 
 def observation_row_from_capture(capture, canonical_frames: dict, *, acquisition_source: str,
-                                  validity_class: str, split: str, parent_key: str | None = None,
+                                  validity_class: str, split: str, lineage_root_key: str,
+                                  benchmark_holdout: bool = False, parent_key: str | None = None,
                                   include_waveforms: bool = True) -> dict:
     """Build one Parquet row from a NativeCapture + per-note CanonicalFrame map.
 
     ``canonical_frames`` maps note (int) -> CanonicalFrame.
     """
     from .algorithms import topology_for
+    from .splits import SPLIT_SCHEME_VERSION
 
     topology = topology_for(capture.patch.algorithm)
     frames_payload = {str(note): frame.to_dict(include_samples=True) for note, frame in canonical_frames.items()}
@@ -143,7 +148,10 @@ def observation_row_from_capture(capture, canonical_frames: dict, *, acquisition
         "waveforms_json": json.dumps([list(w) for w in capture.waveforms]) if include_waveforms else None,
         "acquisition_source": acquisition_source,
         "parent_key": parent_key,
+        "lineage_root_key": lineage_root_key,
         "validity_class": validity_class,
         "split": split,
+        "benchmark_holdout": benchmark_holdout,
+        "split_scheme_version": SPLIT_SCHEME_VERSION,
         "created_at": capture.rendered_at,
     }

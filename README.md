@@ -61,7 +61,12 @@ data depends on this contract being exact and stable.
 | `native.py` | `NativeRenderer` subprocess wrapper enforcing the exact reference contract, with SHA-256 provenance |
 | `features.py` | Canonical 2048-sample phase-bearing frame extraction (see errata doc §1) + black-box target-feature boundary enforcement |
 | `storage.py` | PyArrow Parquet schemas separating permanent native observations from derived target/search data |
-| `cli.py` | `dexfrag doctor \| structure-audit \| dataset-inspect \| monitor` |
+| `splits.py` | Deterministic train/validation/test split assignment + lineage-family grouping + benchmark holdout |
+| `budget.py` | Persistent, resumable native-render budget ledger (count/time/disk caps) |
+| `mutate.py` | Four mutation families for local-mutation acquisition |
+| `acquisition.py` | Four acquisition sources: broad structured, random legal, structure-aware, local mutation |
+| `collector.py` | Resumable/crash-safe/deduplicated collection loop tying the above together |
+| `cli.py` | `dexfrag doctor \| structure-audit \| dataset-inspect \| dataset-coverage \| collect \| monitor` |
 
 ## Tests
 
@@ -73,13 +78,34 @@ data depends on this contract being exact and stable.
 topology structural invariants, live native-renderer contract validation
 (skipped only if the binary is unavailable), canonical frame extraction
 determinism/periodicity, Parquet storage round-trip/dedup, and a
-TensorBoard scalar-logging smoke test.
+TensorBoard scalar-logging smoke test. A further 29 tests (67 total) cover
+deterministic split/lineage assignment, the render budget ledger, mutation
+families, acquisition sources, and the end-to-end resumable/deduplicated
+collector.
+
+## Data acquisition (Phase 2)
+
+```powershell
+.\.venv\Scripts\dexfrag.exe collect datasets\main.parquet --seed 42 `
+  --broad-structured 5000 --random-legal 5000 --structure-aware 5000 --local-mutation 5000 `
+  --max-renders 20000
+.\.venv\Scripts\dexfrag.exe dataset-coverage datasets\main.parquet
+```
+
+`dexfrag collect` is resumable (already-rendered exact patches are skipped),
+crash-safe (periodic flush + a persistent `<dataset>.budget.json` ledger),
+and never exceeds an explicit `--max-renders` / `--max-seconds` /
+`--max-dataset-bytes` cap — no unbounded default is wired in. See
+`docs/plan/PHASE_2_REPORT.md` for the full STOP-gate report, including a
+real bounded 64-observation smoke run and operator-ready collection
+profiles (calibration / capped-count / capped-duration / capped-disk /
+overnight / resume).
 
 ## Status
 
-Phase 0 (bootstrap) and Phase 1 (foundation: native truth wrapper, canonical
-patch model, structural inventory, canonical feature contract) are
-implemented and passing their STOP-gate checks. Phase 2 (data acquisition
-at scale) has not started — see `docs/plan/ERRATA_AND_REVISIONS.md` §4 for
-open design questions (split strategy, native-render budget ledger) that
-must be pinned down before it begins.
+Phase 0 (bootstrap), Phase 1 (foundation), and Phase 2 (acquisition
+machinery: splits, budget ledger, mutation families, acquisition sources,
+resumable collector) are implemented and passing their STOP-gate checks —
+see `docs/plan/PHASE_2_REPORT.md`. Phase 3 (forward-model training) has not
+started: it should not begin until the operator has run a real (non-smoke)
+collection and reviewed its coverage report.

@@ -23,6 +23,7 @@ def test_append_and_read_round_trip(tmp_path):
     frames = {note: canonical_frame(wave, note, max_harmonics=32) for note, wave in zip(capture.notes, capture.waveforms)}
     row = observation_row_from_capture(
         capture, frames, acquisition_source="smoke_test", validity_class="valid", split="train",
+        lineage_root_key=capture.patch_key,
     )
     dataset_path = tmp_path / "observations.parquet"
     table = append_observations(dataset_path, [row])
@@ -40,7 +41,8 @@ def test_append_deduplicates_by_exact_key(tmp_path):
     finally:
         renderer.close()
     frames = {note: canonical_frame(wave, note, max_harmonics=16) for note, wave in zip(capture.notes, capture.waveforms)}
-    row = observation_row_from_capture(capture, frames, acquisition_source="smoke_test", validity_class="valid", split="train")
+    row = observation_row_from_capture(capture, frames, acquisition_source="smoke_test", validity_class="valid", split="train",
+                                        lineage_root_key=capture.patch_key)
 
     dataset_path = tmp_path / "observations.parquet"
     append_observations(dataset_path, [row])

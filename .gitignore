@@ -4,6 +4,8 @@ __pycache__/
 .pytest_cache/
 datasets/*.parquet
 datasets/*.jsonl
+datasets/*.budget.json
+datasets/*.failures.jsonl
 experiments/
 checkpoints/*.pt
 runs/

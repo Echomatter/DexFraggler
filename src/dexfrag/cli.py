@@ -10,6 +10,8 @@ import typer
 
 from . import __version__
 from .algorithms import structural_audit_report
+from .budget import Budget, BudgetCaps
+from .collector import DEFAULT_PLAN, collect as run_collect
 from .features import canonical_frame, validate_wavetable
 from .native import DEFAULT_EXECUTABLE, NativeRenderer, NativeRendererError
 from .patch import blank_patch
@@ -130,6 +132,87 @@ def dataset_inspect(dataset: Path = typer.Argument(..., help="Path to a native-o
         "by_split": dict(Counter(splits)),
     }
     typer.echo(json.dumps(report, indent=2))
+
+
+@app.command(name="dataset-coverage")
+def dataset_coverage(dataset: Path = typer.Argument(..., help="Path to a native-observation Parquet dataset.")) -> None:
+    """Full Phase 2 coverage report: structure, lineage, splits, versions, budget."""
+    from collections import Counter
+
+    table = read_observations(dataset)
+    budget = Budget.load(dataset)
+    report: dict = {
+        "path": str(dataset),
+        "observations": table.num_rows,
+        "renders_attempted_lifetime": budget.renders_attempted,
+        "renders_valid_lifetime": budget.renders_valid,
+        "elapsed_seconds_lifetime": budget.elapsed_seconds,
+        "dataset_bytes": dataset.stat().st_size if dataset.exists() else 0,
+    }
+    if table.num_rows == 0:
+        typer.echo(json.dumps(report, indent=2))
+        return
+
+    algorithm_topology_signature = table.column("algorithm_topology_signature").to_pylist()
+    algorithms = table.column("algorithm").to_pylist()
+    validity = table.column("validity_class").to_pylist()
+    sources = table.column("acquisition_source").to_pylist()
+    splits = table.column("split").to_pylist()
+    lineage_roots = table.column("lineage_root_key").to_pylist()
+    parent_keys = table.column("parent_key").to_pylist()
+    binary_shas = table.column("binary_sha256").to_pylist()
+    feature_versions = table.column("feature_version").to_pylist()
+    benchmark_flags = table.column("benchmark_holdout").to_pylist()
+    algo_feedback = table.column("feedback").to_pylist()
+
+    report.update({
+        "by_algorithm": dict(sorted(Counter(algorithms).items())),
+        "by_algorithm_topology_signature": dict(Counter(algorithm_topology_signature)),
+        "by_validity_class": dict(Counter(validity)),
+        "by_acquisition_source": dict(Counter(sources)),
+        "by_split": dict(Counter(splits)),
+        "by_feedback": dict(sorted(Counter(algo_feedback).items())),
+        "unique_lineage_families": len(set(lineage_roots)),
+        "mutation_derived_rows": sum(1 for p in parent_keys if p is not None),
+        "benchmark_holdout_rows": sum(1 for b in benchmark_flags if b),
+        "renderer_binary_sha256_distribution": dict(Counter(binary_shas)),
+        "feature_version_distribution": dict(Counter(feature_versions)),
+    })
+    typer.echo(json.dumps(report, indent=2))
+
+
+@app.command()
+def collect(
+    dataset: Path = typer.Argument(..., help="Path to the native-observation Parquet dataset (created if missing)."),
+    seed: int = typer.Option(0, help="Deterministic RNG seed for acquisition sources and mutation choices."),
+    broad_structured: int = typer.Option(DEFAULT_PLAN["broad_structured"], help="Candidates from broad structured exploration."),
+    random_legal: int = typer.Option(DEFAULT_PLAN["random_legal"], help="Candidates from random legal exploration."),
+    structure_aware: int = typer.Option(DEFAULT_PLAN["structure_aware"], help="Candidates from structure-aware exploration."),
+    local_mutation: int = typer.Option(DEFAULT_PLAN["local_mutation"], help="Candidates from local mutation of existing valid observations."),
+    max_renders: int = typer.Option(None, help="Hard cap on native renders attempted this run (required for bounded/smoke runs)."),
+    max_seconds: float = typer.Option(None, help="Hard cap on wall-clock seconds this run."),
+    max_dataset_bytes: int = typer.Option(None, help="Hard cap on dataset file size in bytes."),
+    executable: Path = typer.Option(DEFAULT_EXECUTABLE, help="Native renderer executable path."),
+    no_waveforms: bool = typer.Option(False, help="Do not store raw 4096-sample waveforms (canonical frames only; smaller dataset)."),
+) -> None:
+    """Run a bounded, resumable native-observation collection session.
+
+    No default cap is applied automatically -- pass --max-renders (and/or
+    --max-seconds / --max-dataset-bytes) explicitly. This mirrors the plan's
+    "no unbounded default" requirement for operator-ready profiles.
+    """
+    plan = {
+        "broad_structured": broad_structured,
+        "random_legal": random_legal,
+        "structure_aware": structure_aware,
+        "local_mutation": local_mutation,
+    }
+    caps = BudgetCaps(max_renders_attempted=max_renders, max_elapsed_seconds=max_seconds, max_dataset_bytes=max_dataset_bytes)
+    summary = run_collect(
+        dataset, plan=plan, seed=seed, caps=caps, executable_path=executable,
+        include_waveforms=not no_waveforms,
+    )
+    typer.echo(json.dumps(summary.to_dict(), indent=2))
 
 
 @app.command()
