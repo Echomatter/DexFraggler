@@ -1,7 +1,11 @@
 import random
 
-from dexfrag.acquisition import broad_structured_exploration, local_mutation, random_legal_exploration, \
-    structure_aware_exploration
+import pytest
+
+from dexfrag.acquisition import COHERENT_RATIO_FAMILY_NAMES, broad_structured_exploration, \
+    coherent_ratio_exploration, local_mutation, random_legal_exploration, structure_aware_exploration
+from dexfrag.native import DEFAULT_EXECUTABLE, NativeRenderer
+from dexfrag.features import canonical_frame
 from dexfrag.patch import patch_key, validate_patch
 
 
@@ -61,3 +65,64 @@ def test_local_mutation_records_parent_lineage():
 def test_local_mutation_with_no_parents_yields_nothing():
     rng = random.Random(5)
     assert list(local_mutation(rng, [], 10)) == []
+
+
+def test_coherent_ratio_exploration_covers_every_algorithm_at_least_once():
+    rng = random.Random(6)
+    candidates = list(coherent_ratio_exploration(rng, 32))
+    algorithms = {c.patch.algorithm for c in candidates}
+    assert algorithms == set(range(1, 33))
+    assert all(c.acquisition_source == "coherent_ratio" for c in candidates)
+
+
+def test_coherent_ratio_exploration_uses_only_exact_integer_ratio_operators():
+    """Every operator must have fine=0, detune=7 (neutral) and mode=0 (ratio
+    mode) so its frequency is an exact integer/half-integer multiple of the
+    played note -- the whole point of this acquisition source."""
+    rng = random.Random(7)
+    candidates = list(coherent_ratio_exploration(rng, 50))
+    for candidate in candidates:
+        for operator in candidate.patch.operators:
+            assert operator.fine == 0
+            assert operator.detune == 7
+            assert operator.mode == 0
+            assert operator.coarse <= 16  # every family tops out at 16
+
+
+def test_coherent_ratio_exploration_cycles_through_every_ratio_family():
+    rng = random.Random(8)
+    candidates = list(coherent_ratio_exploration(rng, len(COHERENT_RATIO_FAMILY_NAMES) * 3))
+    # Distinguish families by the set of distinct coarse values actually used
+    # per candidate (a reasonable proxy since family membership isn't stored
+    # directly on the patch).
+    coarse_sets = {tuple(sorted({op.coarse for op in c.patch.operators})) for c in candidates}
+    assert len(coarse_sets) >= 4  # meaningfully diverse across the 7 families
+
+
+def test_coherent_ratio_exploration_varies_feedback_and_levels():
+    rng = random.Random(9)
+    candidates = list(coherent_ratio_exploration(rng, 60))
+    feedbacks = {c.patch.feedback for c in candidates}
+    assert len(feedbacks) > 1
+    levels = {op.level for c in candidates for op in c.patch.operators}
+    assert len(levels) > 5
+
+
+@pytest.mark.skipif(not DEFAULT_EXECUTABLE.is_file(), reason="native renderer required to verify real periodicity")
+def test_coherent_ratio_exploration_renders_with_high_periodicity():
+    """The actual proof: rendered coherent_ratio patches should measure a
+    high periodicity_ratio far more often than a naive independently-random
+    patch does (see docs/plan/PHASE_2_REPORT.md's original finding)."""
+    rng = random.Random(10)
+    candidates = list(coherent_ratio_exploration(rng, 12))
+    renderer = NativeRenderer()
+    try:
+        ratios = []
+        for candidate in candidates:
+            capture = renderer.render(candidate.patch)
+            frames = [canonical_frame(w, n) for w, n in zip(capture.waveforms, capture.notes)]
+            ratios.append(min(f.periodicity_ratio for f in frames))
+    finally:
+        renderer.close()
+    high_periodicity_count = sum(1 for r in ratios if r >= 0.5)
+    assert high_periodicity_count >= len(candidates) // 2

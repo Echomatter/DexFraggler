@@ -33,8 +33,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .acquisition import AcquisitionCandidate, broad_structured_exploration, local_mutation, \
-    random_legal_exploration, structure_aware_exploration
+from .acquisition import AcquisitionCandidate, broad_structured_exploration, coherent_ratio_exploration, \
+    local_mutation, random_legal_exploration, structure_aware_exploration
 from .budget import Budget, BudgetCaps, BudgetExceeded
 from .features import canonical_frame
 from .native import NativeRenderer, NativeRendererError
@@ -42,11 +42,63 @@ from .splits import assign_split, benchmark_holdout as compute_benchmark_holdout
 from .storage import append_observations, observation_row_from_capture, read_observations
 
 DEFAULT_PLAN = {
+    "coherent_ratio": 16,
     "broad_structured": 16,
     "random_legal": 16,
     "structure_aware": 16,
     "local_mutation": 16,
 }
+
+# --- training-data contract (Phase 2 operator-gate revision) ----------------
+# Permanent native observations retain *every* validity class -- nothing is
+# ever deleted, relabeled, or silently dropped, including genuinely
+# `unstable` (non-periodic-at-the-played-note) and `silent`/`near_silent`
+# renders. That is deliberate: those are real, legitimate DX7 behavior, and
+# discarding them would bias the permanent corpus.
+#
+# However, `validity_class` is *not* decorative -- later phases (forward
+# model, inverse proposer, structured search) must treat it as a first-class
+# training-data selector, not just a coverage statistic:
+#
+#   - `valid`:        the canonical 2048-sample frame is a faithful,
+#                      phase-bearing single-cycle reconstruction of a
+#                      genuinely periodic-at-the-note waveform. This is the
+#                      *only* class that should be used, by default, as a
+#                      clean stationary-waveform training target/label.
+#   - `near_silent`:   technically periodic-or-not, but too quiet to trust
+#                      amplitude/phase estimates from (peak below
+#                      NEAR_SILENT_PEAK_THRESHOLD). Usable as permanent
+#                      truth for coverage/robustness experiments, but must
+#                      not be treated as an ordinary clean training target
+#                      without an explicit, documented decision to do so.
+#   - `silent`:        true silence. Native ground truth (e.g. "this exact
+#                      patch renders silent"), never a periodic-waveform
+#                      training target.
+#   - `clipped`:       peak at/above CLIPPED_PEAK_THRESHOLD; the canonical
+#                      frame may not reflect true operator amplitudes past
+#                      the quantization ceiling. Usable as native truth, not
+#                      as a clean regression target for amplitude.
+#   - `unstable`:      periodicity_ratio below UNSTABLE_PERIODICITY_THRESHOLD
+#                      for at least one captured note -- the harmonic-series
+#                      canonicalization model does not faithfully represent
+#                      this capture at the played note's nominal fundamental
+#                      (real inharmonic/beating/non-stationary DX7 behavior,
+#                      not a defect). The raw 4096-sample native capture
+#                      remains valid ground truth for *that capture*, but the
+#                      derived 2048-sample canonical frame must not be fed to
+#                      a model as if it were a clean periodic label. Any
+#                      later phase that wants to use these rows must define
+#                      an explicit different representation/objective for
+#                      them (e.g. a raw-waveform or spectrogram-based target)
+#                      rather than reusing the periodic-frame contract.
+#   - render failures: never stored as observations at all (see
+#                      `<dataset>.failures.jsonl`); there is no row, hence no
+#                      validity_class, to accidentally consume downstream.
+#
+# This module and `storage.py` intentionally keep all classes in one table
+# with one shared schema (permanent truth is not partitioned by validity),
+# but any Phase 3+ dataset loader MUST filter on `validity_class` explicitly
+# before treating `canonical_frames_json` as a ground-truth periodic label.
 
 # Validity classification thresholds. These are deliberately conservative
 # and documented here (not hidden constants elsewhere): "silent"/"clipped"
@@ -107,6 +159,10 @@ def classify_validity(capture, frames: dict) -> str:
 
 
 def _build_candidate_stream(rng: random.Random, plan: dict[str, int], mutation_parents: list):
+    # coherent_ratio runs first so its (deliberately periodic) outputs are
+    # available as local_mutation parents within this same collection run,
+    # even when the dataset starts out with zero prior valid observations.
+    yield from coherent_ratio_exploration(rng, plan.get("coherent_ratio", 0))
     for count in (plan.get("broad_structured", 0),):
         yield from broad_structured_exploration(rng, count)
     yield from random_legal_exploration(rng, plan.get("random_legal", 0))

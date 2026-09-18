@@ -164,6 +164,27 @@ def dataset_coverage(dataset: Path = typer.Argument(..., help="Path to a native-
     feature_versions = table.column("feature_version").to_pylist()
     benchmark_flags = table.column("benchmark_holdout").to_pylist()
     algo_feedback = table.column("feedback").to_pylist()
+    patch_jsons = table.column("patch_json").to_pylist()
+
+    # Coarse-ratio-family coverage: bucket every operator's coarse value
+    # into "integer-family" (0..15, matching structure_aware/coherent_ratio's
+    # low-ratio range) vs "high" (16..31), plus a coherent-family fine==0
+    # counter to make coherent_ratio_exploration's effect on the corpus
+    # directly visible without re-deriving it from acquisition_source alone.
+    coarse_bucket_counts = {"low_0_15": 0, "high_16_31": 0}
+    exact_integer_ratio_operator_count = 0
+    total_operators = 0
+    for patch_json in patch_jsons:
+        patch = json.loads(patch_json)
+        for operator in patch["operators"]:
+            total_operators += 1
+            coarse = operator["coarse"]
+            if coarse <= 15:
+                coarse_bucket_counts["low_0_15"] += 1
+            else:
+                coarse_bucket_counts["high_16_31"] += 1
+            if operator["fine"] == 0 and operator["detune"] == 7:
+                exact_integer_ratio_operator_count += 1
 
     report.update({
         "by_algorithm": dict(sorted(Counter(algorithms).items())),
@@ -177,6 +198,10 @@ def dataset_coverage(dataset: Path = typer.Argument(..., help="Path to a native-
         "benchmark_holdout_rows": sum(1 for b in benchmark_flags if b),
         "renderer_binary_sha256_distribution": dict(Counter(binary_shas)),
         "feature_version_distribution": dict(Counter(feature_versions)),
+        "coarse_ratio_bucket_distribution": coarse_bucket_counts,
+        "exact_integer_ratio_operator_fraction": (
+            exact_integer_ratio_operator_count / total_operators if total_operators else 0.0
+        ),
     })
     typer.echo(json.dumps(report, indent=2))
 
@@ -185,6 +210,7 @@ def dataset_coverage(dataset: Path = typer.Argument(..., help="Path to a native-
 def collect(
     dataset: Path = typer.Argument(..., help="Path to the native-observation Parquet dataset (created if missing)."),
     seed: int = typer.Option(0, help="Deterministic RNG seed for acquisition sources and mutation choices."),
+    coherent_ratio: int = typer.Option(DEFAULT_PLAN["coherent_ratio"], help="Candidates from coherent-ratio exploration (deliberately periodic/stationary patches)."),
     broad_structured: int = typer.Option(DEFAULT_PLAN["broad_structured"], help="Candidates from broad structured exploration."),
     random_legal: int = typer.Option(DEFAULT_PLAN["random_legal"], help="Candidates from random legal exploration."),
     structure_aware: int = typer.Option(DEFAULT_PLAN["structure_aware"], help="Candidates from structure-aware exploration."),
@@ -202,6 +228,7 @@ def collect(
     "no unbounded default" requirement for operator-ready profiles.
     """
     plan = {
+        "coherent_ratio": coherent_ratio,
         "broad_structured": broad_structured,
         "random_legal": random_legal,
         "structure_aware": structure_aware,

@@ -12,7 +12,7 @@ pytestmark = pytest.mark.skipif(
     reason="native/bin/DexfragglerReference.exe is required for collector tests",
 )
 
-TINY_PLAN = {"broad_structured": 3, "random_legal": 3, "structure_aware": 2, "local_mutation": 0}
+TINY_PLAN = {"coherent_ratio": 3, "broad_structured": 3, "random_legal": 3, "structure_aware": 2, "local_mutation": 0}
 
 
 def test_collect_is_bounded_by_max_renders(tmp_path):
@@ -86,6 +86,83 @@ def test_collect_local_mutation_uses_prior_valid_observations(tmp_path):
     mutation_rows = [p for p in table.column("acquisition_source").to_pylist() if p == "local_mutation"]
     if summary.rendered:
         assert len(mutation_rows) > 0
+
+
+def test_collect_coherent_ratio_seeds_valid_parents_for_local_mutation(tmp_path):
+    """Operator-gate revision: coherent_ratio_exploration must reliably
+    produce `valid` observations, and local_mutation must then pick them up
+    as parents within the *same* collection run, recording parent_key and
+    preserving the lineage root."""
+    dataset_path = tmp_path / "obs.parquet"
+    summary = collect(
+        dataset_path,
+        plan={"coherent_ratio": 12, "broad_structured": 0, "random_legal": 0, "structure_aware": 0, "local_mutation": 12},
+        seed=11,
+    )
+    assert summary.by_validity.get("valid", 0) > 0, "coherent_ratio must produce at least one valid observation"
+    assert summary.by_source.get("local_mutation", 0) > 0, "local_mutation must fire once valid parents exist"
+
+    table = read_observations(dataset_path)
+    keys = table.column("key").to_pylist()
+    parent_keys = table.column("parent_key").to_pylist()
+    lineage_roots = table.column("lineage_root_key").to_pylist()
+    sources = table.column("acquisition_source").to_pylist()
+    splits = table.column("split").to_pylist()
+    key_to_root = dict(zip(keys, lineage_roots))
+
+    mutation_indices = [i for i, s in enumerate(sources) if s == "local_mutation"]
+    assert mutation_indices
+    for i in mutation_indices:
+        parent_key = parent_keys[i]
+        assert parent_key is not None  # (1) selects a valid parent + (2) records parent_patch_key
+        assert parent_key in key_to_root  # parent exists in the dataset
+        parent_root = key_to_root[parent_key]
+        assert lineage_roots[i] == parent_root  # (3) preserves the lineage root
+        # (6) stable split assignment by lineage: child shares its root's split
+        root_index = keys.index(parent_root) if parent_root in keys else None
+        if root_index is not None:
+            assert splits[i] == splits[root_index]
+
+    # (5) dedup: exact-key duplicates are never stored twice, regardless of
+    # which acquisition source produced them (including mutation children).
+    assert len(set(keys)) == len(keys)
+    # Re-running the deterministic, corpus-state-independent portion of the
+    # plan (coherent_ratio only) with the same seed must be a full no-op,
+    # since every one of those patches already exists in the dataset.
+    # (local_mutation is intentionally excluded here: its output legitimately
+    # depends on how many valid parents already exist on disk when a run
+    # starts, which differs between this from-scratch run and a rerun where
+    # the whole existing valid pool is pre-loaded -- that is expected
+    # behavior, not a determinism violation.)
+    before_rows = table.num_rows
+    second = collect(
+        dataset_path,
+        plan={"coherent_ratio": 12, "broad_structured": 0, "random_legal": 0, "structure_aware": 0, "local_mutation": 0},
+        seed=11,
+    )
+    assert read_observations(dataset_path).num_rows == before_rows
+    assert second.rendered == 0
+    assert second.duplicates_skipped == second.requested
+
+
+def test_collect_retains_unstable_observations_from_other_sources(tmp_path):
+    """Non-coherent sources must keep contributing genuinely unstable/other
+    validity classes -- coherent_ratio must not replace or crowd them out."""
+    dataset_path = tmp_path / "obs.parquet"
+    collect(
+        dataset_path,
+        plan={"coherent_ratio": 4, "broad_structured": 6, "random_legal": 6, "structure_aware": 6, "local_mutation": 0},
+        seed=12,
+    )
+    table = read_observations(dataset_path)
+    by_source_validity = {}
+    for source, validity in zip(table.column("acquisition_source").to_pylist(), table.column("validity_class").to_pylist()):
+        by_source_validity.setdefault(source, set()).add(validity)
+    non_coherent_sources = {"broad_structured", "random_legal", "structure_aware"} & set(by_source_validity)
+    assert non_coherent_sources, "at least one non-coherent source must have rendered"
+    # At least one non-coherent source must retain a non-"valid" class,
+    # proving unstable/degenerate observations are not filtered out.
+    assert any(classes - {"valid"} for source, classes in by_source_validity.items() if source in non_coherent_sources)
 
 
 def test_collect_writes_failures_log_on_error(tmp_path, monkeypatch):

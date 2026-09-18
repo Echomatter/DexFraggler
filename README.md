@@ -64,7 +64,7 @@ data depends on this contract being exact and stable.
 | `splits.py` | Deterministic train/validation/test split assignment + lineage-family grouping + benchmark holdout |
 | `budget.py` | Persistent, resumable native-render budget ledger (count/time/disk caps) |
 | `mutate.py` | Four mutation families for local-mutation acquisition |
-| `acquisition.py` | Four acquisition sources: broad structured, random legal, structure-aware, local mutation |
+| `acquisition.py` | Five acquisition sources: broad structured, random legal, structure-aware, coherent ratio, local mutation |
 | `collector.py` | Resumable/crash-safe/deduplicated collection loop tying the above together |
 | `cli.py` | `dexfrag doctor \| structure-audit \| dataset-inspect \| dataset-coverage \| collect \| monitor` |
 
@@ -78,17 +78,17 @@ data depends on this contract being exact and stable.
 topology structural invariants, live native-renderer contract validation
 (skipped only if the binary is unavailable), canonical frame extraction
 determinism/periodicity, Parquet storage round-trip/dedup, and a
-TensorBoard scalar-logging smoke test. A further 29 tests (67 total) cover
+TensorBoard scalar-logging smoke test. A further 36 tests (74 total) cover
 deterministic split/lineage assignment, the render budget ledger, mutation
-families, acquisition sources, and the end-to-end resumable/deduplicated
-collector.
+families, all five acquisition sources (including coherent ratio), and the
+end-to-end resumable/deduplicated collector.
 
 ## Data acquisition (Phase 2)
 
 ```powershell
 .\.venv\Scripts\dexfrag.exe collect datasets\main.parquet --seed 42 `
-  --broad-structured 5000 --random-legal 5000 --structure-aware 5000 --local-mutation 5000 `
-  --max-renders 20000
+  --coherent-ratio 2000 --broad-structured 5000 --random-legal 2000 `
+  --structure-aware 2000 --local-mutation 2000 --max-renders 12000
 .\.venv\Scripts\dexfrag.exe dataset-coverage datasets\main.parquet
 ```
 

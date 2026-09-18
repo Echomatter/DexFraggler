@@ -22,6 +22,31 @@ from .patch import LIMITS, Operator, Patch, validate_patch
 _INTEGER_COARSE_VALUES = tuple(range(0, 16))  # 0 and 1..15 are common harmonic ratios
 _HIGH_COARSE_VALUES = tuple(range(16, LIMITS["coarse"] + 1))
 
+# --- coherent-ratio families used by coherent_ratio_exploration -------------
+# Each family is a small set of DX7 "coarse" values (operator frequency
+# ratio multipliers relative to the played note, in ratio mode). With
+# fine=0 (no fractional ratio component) and detune=7 (the centered/neutral
+# detune value used throughout this project, see patch.py's
+# RESEARCH_PROFILE_NOTES / blank_patch), every operator built from these
+# values has an *exact* integer-or-half-integer frequency ratio to the
+# note's own nominal fundamental. When every operator in a patch (carriers
+# and modulators alike) is drawn from one such family, the whole signal
+# graph -- including any FM modulation -- stays commensurate with the
+# note's fundamental period, which is what "periodic at the played note"
+# (a high ``periodicity_ratio``) requires. DX7 coarse 0 denotes the ratio
+# 0.5 (an octave below), which is why it appears alongside small integers
+# in a couple of these families rather than only as an edge case.
+_COHERENT_RATIO_FAMILIES: dict[str, tuple[int, ...]] = {
+    "unison": (1,),
+    "octave_stack": (1, 2, 4, 8),
+    "wide_octave_stack": (1, 2, 4, 8, 16),
+    "harmonic_series_low": (1, 2, 3, 4),
+    "harmonic_series_full": (1, 2, 3, 4, 5, 6),
+    "fifth_stack": (1, 3),
+    "sub_harmonic_unison": (0, 1),  # coarse 0 == x0.5 ratio, still commensurate
+}
+COHERENT_RATIO_FAMILY_NAMES = tuple(_COHERENT_RATIO_FAMILIES.keys())
+
 
 @dataclass(frozen=True)
 class AcquisitionCandidate:
@@ -103,6 +128,67 @@ def structure_aware_exploration(rng: random.Random, count: int):
             operators.append(Operator(op=op_number, coarse=coarse, fine=fine, detune=detune, mode=mode, level=level))
         patch = validate_patch(Patch(algorithm=topology.number, feedback=feedback, operators=tuple(operators)))
         yield AcquisitionCandidate(patch=patch, acquisition_source="structure_aware")
+
+
+def coherent_ratio_exploration(rng: random.Random, count: int):
+    """Deliberately construct harmonically coherent / stationary patches.
+
+    Purpose (Phase 2 operator-gate revision): the other four sources sample
+    each operator's coarse ratio independently, which is realistic DX7
+    coverage but predominantly produces patches that are *not* periodic at
+    the played note's own fundamental within one 4096-sample capture (see
+    docs/plan/PHASE_2_REPORT.md's "unstable" finding). This source instead
+    picks one small ``_COHERENT_RATIO_FAMILIES`` family per candidate and
+    draws every operator's coarse ratio from it, with fine=0 and the
+    neutral detune=7, so the whole signal graph -- carriers and modulators,
+    including any FM -- stays commensurate with the note's fundamental
+    period. This deliberately populates the ``valid`` (periodic) region of
+    the observation corpus and gives ``local_mutation`` real parents to
+    mutate around; it does not replace or shrink the other sources, which
+    remain the corpus's legitimate coverage of inharmonic/unstable DX7
+    behavior.
+
+    Still varies: algorithm/topology (cycled so all 32 remain reachable),
+    operator role (carriers are drawn from the low end of the family to
+    anchor the audible register near the note's own pitch; modulators may
+    use any family member for brighter harmonic content), feedback regime
+    (mostly low/controlled, occasionally mid or high for diversity), output
+    levels, and the ratio family itself (cycled across all seven families).
+    """
+    topologies = all_topologies()
+    feedback_low = tuple(range(0, 3))
+    feedback_mid = tuple(range(3, 5))
+    feedback_high = tuple(range(5, 8))
+    for i in range(count):
+        topology = topologies[i % len(topologies)]
+        family_name = COHERENT_RATIO_FAMILY_NAMES[i % len(COHERENT_RATIO_FAMILY_NAMES)]
+        ratios = _COHERENT_RATIO_FAMILIES[family_name]
+
+        # Controlled feedback regime: mostly low (favors periodicity), some
+        # mid, rarely high -- feedback is the single parameter most likely
+        # to destabilize an otherwise-coherent ratio family.
+        roll = rng.random()
+        if roll < 0.6:
+            feedback = rng.choice(feedback_low)
+        elif roll < 0.9:
+            feedback = rng.choice(feedback_mid)
+        else:
+            feedback = rng.choice(feedback_high)
+
+        operators = []
+        low_ratio_count = min(2, len(ratios))
+        for op_index in range(6):
+            op_number = op_index + 1
+            is_carrier = op_index in topology.carriers
+            if is_carrier:
+                coarse = ratios[rng.randrange(low_ratio_count)]
+                level = rng.randint(40, LIMITS["level"])
+            else:
+                coarse = rng.choice(ratios)
+                level = rng.randint(20, LIMITS["level"])
+            operators.append(Operator(op=op_number, coarse=coarse, fine=0, detune=7, mode=0, level=level))
+        patch = validate_patch(Patch(algorithm=topology.number, feedback=feedback, operators=tuple(operators)))
+        yield AcquisitionCandidate(patch=patch, acquisition_source="coherent_ratio")
 
 
 def local_mutation(rng: random.Random, parents: list[tuple[Patch, str, str]], count: int):
