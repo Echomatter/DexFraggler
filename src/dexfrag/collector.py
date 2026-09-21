@@ -197,6 +197,7 @@ def collect(
     executable_path: Path | str | None = None,
     flush_every: int = 16,
     include_waveforms: bool = True,
+    progress_callback=None,
 ) -> CollectionSummary:
     dataset_path = Path(dataset_path)
     plan = plan or DEFAULT_PLAN
@@ -232,6 +233,8 @@ def collect(
 
             if key in existing_keys:
                 summary.duplicates_skipped += 1
+                if progress_callback:
+                    progress_callback(summary)
                 continue
 
             try:
@@ -254,6 +257,8 @@ def collect(
                         "error": str(error),
                         "time": time.time(),
                     }) + "\n")
+                if progress_callback:
+                    progress_callback(summary)
                 continue
 
             frames = {
@@ -285,6 +290,8 @@ def collect(
 
             if len(buffer) >= flush_every:
                 flush()
+            if progress_callback:
+                progress_callback(summary)
         else:
             summary.stopped_reason = summary.stopped_reason or "plan_exhausted"
     finally:

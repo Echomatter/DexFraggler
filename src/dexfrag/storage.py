@@ -20,6 +20,8 @@ import pyarrow.parquet as pq
 
 OBSERVATION_SCHEMA_VERSION = "dexfrag-observation-v1"
 
+SHARD_MAX_ROWS = 1000
+
 NATIVE_OBSERVATION_SCHEMA = pa.schema([
     pa.field("schema_version", pa.string()),
     pa.field("key", pa.string()),  # exact patch identity (hex of 155 VCED bytes)
@@ -73,6 +75,39 @@ TARGET_PATCH_SCORE_SCHEMA = pa.schema([
 ])
 
 
+def _is_shard_mode(path: Path) -> bool:
+    return path.suffix != ".parquet"
+
+
+def _shard_path(directory: Path, index: int) -> Path:
+    return directory / f"shard_{index:05d}.parquet"
+
+
+def _keys_index_path(directory: Path) -> Path:
+    return directory / "keys_index.json"
+
+
+def _read_keys_index(directory: Path) -> dict[str, int]:
+    idx_path = _keys_index_path(directory)
+    if idx_path.exists():
+        with open(idx_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    index: dict[str, int] = {}
+    for shard_file in sorted(directory.glob("shard_*.parquet")):
+        shard_num = int(shard_file.stem.split("_")[1])
+        table = pq.read_table(shard_file, columns=["key"])
+        for k in table.column("key").to_pylist():
+            index[k] = shard_num
+    _write_keys_index(directory, index)
+    return index
+
+
+def _write_keys_index(directory: Path, index: dict[str, int]) -> None:
+    idx_path = _keys_index_path(directory)
+    with open(idx_path, "w", encoding="utf-8") as f:
+        json.dump(index, f)
+
+
 def _atomic_write_table(path: Path, table: pa.Table) -> None:
     directory = path.parent
     directory.mkdir(parents=True, exist_ok=True)
@@ -91,27 +126,99 @@ def read_observations(path: Path | str) -> pa.Table:
     path = Path(path)
     if not path.exists():
         return NATIVE_OBSERVATION_SCHEMA.empty_table()
+    if _is_shard_mode(path):
+        if not path.is_dir():
+            return NATIVE_OBSERVATION_SCHEMA.empty_table()
+        shard_files = sorted(path.glob("shard_*.parquet"))
+        if not shard_files:
+            return NATIVE_OBSERVATION_SCHEMA.empty_table()
+        tables = [pq.read_table(sf, schema=NATIVE_OBSERVATION_SCHEMA) for sf in shard_files]
+        return pa.concat_tables(tables)
     return pq.read_table(path, schema=NATIVE_OBSERVATION_SCHEMA)
 
 
 def append_observations(path: Path | str, rows: list[dict]) -> pa.Table:
     """Append rows to the observation table, skipping exact-key duplicates.
 
-    Rewrites the whole file atomically (append-only Parquet without native
-    row-group append support is not safe against partial writes). Acceptable
-    for Phase 1/2 smoke scale; Phase 2's real collector may shard files by
-    session instead of rewriting one growing file.
+    Single-file mode (path ends with ``.parquet``): rewrites the whole file
+    atomically. Acceptable for Phase 1/2 smoke scale.
+
+    Shard mode (any other path): appends to numbered shard files inside the
+    directory, starting a new shard once the current one reaches
+    ``SHARD_MAX_ROWS``. A sidecar ``keys_index.json`` tracks key→shard
+    mappings for O(1) dedup without reading every shard.
     """
     path = Path(path)
-    existing = read_observations(path)
-    existing_keys = set(existing.column("key").to_pylist()) if existing.num_rows else set()
-    new_rows = [row for row in rows if row["key"] not in existing_keys]
+    if not _is_shard_mode(path):
+        existing = read_observations(path)
+        existing_keys = set(existing.column("key").to_pylist()) if existing.num_rows else set()
+        seen_keys = set(existing_keys)
+        new_rows = []
+        for row in rows:
+            if row["key"] not in seen_keys:
+                new_rows.append(row)
+                seen_keys.add(row["key"])
+        if not new_rows:
+            return existing
+        new_table = pa.Table.from_pylist(new_rows, schema=NATIVE_OBSERVATION_SCHEMA)
+        combined = pa.concat_tables([existing, new_table]) if existing.num_rows else new_table
+        _atomic_write_table(path, combined)
+        return combined
+
+    path.mkdir(parents=True, exist_ok=True)
+    key_index = _read_keys_index(path)
+    seen_keys = set(key_index)
+    new_rows = []
+    for row in rows:
+        if row["key"] not in seen_keys:
+            new_rows.append(row)
+            seen_keys.add(row["key"])
     if not new_rows:
-        return existing
-    new_table = pa.Table.from_pylist(new_rows, schema=NATIVE_OBSERVATION_SCHEMA)
-    combined = pa.concat_tables([existing, new_table]) if existing.num_rows else new_table
-    _atomic_write_table(path, combined)
-    return combined
+        return read_observations(path)
+
+    shard_files = sorted(path.glob("shard_*.parquet"))
+    if shard_files:
+        current_shard_idx = int(shard_files[-1].stem.split("_")[1])
+        current_shard_table = pq.read_table(shard_files[-1], schema=NATIVE_OBSERVATION_SCHEMA)
+        current_row_count = current_shard_table.num_rows
+    else:
+        current_shard_idx = 0
+        current_shard_table = None
+        current_row_count = 0
+    if current_row_count >= SHARD_MAX_ROWS:
+        current_shard_idx += 1
+        current_shard_table = None
+        current_row_count = 0
+
+    batch: list[dict] = []
+    for row in new_rows:
+        if current_row_count + len(batch) >= SHARD_MAX_ROWS and batch:
+            batch_table = pa.Table.from_pylist(batch, schema=NATIVE_OBSERVATION_SCHEMA)
+            if current_shard_table is not None:
+                merged = pa.concat_tables([current_shard_table, batch_table])
+            else:
+                merged = batch_table
+            _atomic_write_table(_shard_path(path, current_shard_idx), merged)
+            for r in batch:
+                key_index[r["key"]] = current_shard_idx
+            current_shard_table = None
+            current_shard_idx += 1
+            current_row_count = 0
+            batch = []
+        batch.append(row)
+
+    if batch:
+        batch_table = pa.Table.from_pylist(batch, schema=NATIVE_OBSERVATION_SCHEMA)
+        if current_shard_table is not None:
+            merged = pa.concat_tables([current_shard_table, batch_table])
+        else:
+            merged = batch_table
+        _atomic_write_table(_shard_path(path, current_shard_idx), merged)
+        for r in batch:
+            key_index[r["key"]] = current_shard_idx
+
+    _write_keys_index(path, key_index)
+    return read_observations(path)
 
 
 def observation_row_from_capture(capture, canonical_frames: dict, *, acquisition_source: str,

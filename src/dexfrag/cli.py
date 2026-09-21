@@ -165,6 +165,7 @@ def dataset_coverage(dataset: Path = typer.Argument(..., help="Path to a native-
     benchmark_flags = table.column("benchmark_holdout").to_pylist()
     algo_feedback = table.column("feedback").to_pylist()
     patch_jsons = table.column("patch_json").to_pylist()
+    canonical_frames_jsons = table.column("canonical_frames_json").to_pylist()
 
     # Coarse-ratio-family coverage: bucket every operator's coarse value
     # into "integer-family" (0..15, matching structure_aware/coherent_ratio's
@@ -172,10 +173,15 @@ def dataset_coverage(dataset: Path = typer.Argument(..., help="Path to a native-
     # counter to make coherent_ratio_exploration's effect on the corpus
     # directly visible without re-deriving it from acquisition_source alone.
     coarse_bucket_counts = {"low_0_15": 0, "high_16_31": 0}
+    fine_bucket_counts = {"0": 0, "1_25": 0, "26_50": 0, "51_75": 0, "76_99": 0}
+    detune_bucket_counts = {"0": 0, "1_25": 0, "26_50": 0, "51_75": 0, "76_99": 0}
+    output_level_bucket_counts = {"0": 0, "1_25": 0, "26_50": 0, "51_75": 0, "76_99": 0}
+    carrier_count_distribution = Counter()
     exact_integer_ratio_operator_count = 0
     total_operators = 0
     for patch_json in patch_jsons:
         patch = json.loads(patch_json)
+        carrier_count_distribution[len(patch["operators"])] += 1
         for operator in patch["operators"]:
             total_operators += 1
             coarse = operator["coarse"]
@@ -183,8 +189,63 @@ def dataset_coverage(dataset: Path = typer.Argument(..., help="Path to a native-
                 coarse_bucket_counts["low_0_15"] += 1
             else:
                 coarse_bucket_counts["high_16_31"] += 1
+            fine = operator["fine"]
+            if fine == 0:
+                fine_bucket_counts["0"] += 1
+            elif fine <= 25:
+                fine_bucket_counts["1_25"] += 1
+            elif fine <= 50:
+                fine_bucket_counts["26_50"] += 1
+            elif fine <= 75:
+                fine_bucket_counts["51_75"] += 1
+            else:
+                fine_bucket_counts["76_99"] += 1
+            detune = operator["detune"]
+            if detune == 0:
+                detune_bucket_counts["0"] += 1
+            elif detune <= 25:
+                detune_bucket_counts["1_25"] += 1
+            elif detune <= 50:
+                detune_bucket_counts["26_50"] += 1
+            elif detune <= 75:
+                detune_bucket_counts["51_75"] += 1
+            else:
+                detune_bucket_counts["76_99"] += 1
+            output_level = operator["level"]
+            if output_level == 0:
+                output_level_bucket_counts["0"] += 1
+            elif output_level <= 25:
+                output_level_bucket_counts["1_25"] += 1
+            elif output_level <= 50:
+                output_level_bucket_counts["26_50"] += 1
+            elif output_level <= 75:
+                output_level_bucket_counts["51_75"] += 1
+            else:
+                output_level_bucket_counts["76_99"] += 1
             if operator["fine"] == 0 and operator["detune"] == 7:
                 exact_integer_ratio_operator_count += 1
+
+    periodicity_ratios = []
+    for frames_json in canonical_frames_jsons:
+        frames = json.loads(frames_json)
+        for frame_data in frames.values():
+            if "periodicity_ratio" in frame_data:
+                periodicity_ratios.append(frame_data["periodicity_ratio"])
+    spectral_diversity = {
+        "periodicity_ratio_mean": (
+            sum(periodicity_ratios) / len(periodicity_ratios) if periodicity_ratios else 0.0
+        ),
+        "periodicity_ratio_std": (
+            (sum((r - sum(periodicity_ratios) / len(periodicity_ratios)) ** 2 for r in periodicity_ratios) / len(periodicity_ratios)) ** 0.5
+            if periodicity_ratios else 0.0
+        ),
+        "periodicity_ratio_count": len(periodicity_ratios),
+    }
+
+    renders_per_second = (
+        budget.renders_valid / budget.elapsed_seconds if budget.elapsed_seconds > 0 else 0.0
+    )
+    duplicate_attempts_count = budget.renders_attempted - table.num_rows
 
     report.update({
         "by_algorithm": dict(sorted(Counter(algorithms).items())),
@@ -199,6 +260,13 @@ def dataset_coverage(dataset: Path = typer.Argument(..., help="Path to a native-
         "renderer_binary_sha256_distribution": dict(Counter(binary_shas)),
         "feature_version_distribution": dict(Counter(feature_versions)),
         "coarse_ratio_bucket_distribution": coarse_bucket_counts,
+        "fine_bucket_distribution": fine_bucket_counts,
+        "detune_bucket_distribution": detune_bucket_counts,
+        "output_level_bucket_distribution": output_level_bucket_counts,
+        "carrier_count_distribution": dict(sorted(carrier_count_distribution.items())),
+        "spectral_diversity_summary": spectral_diversity,
+        "renders_per_second": renders_per_second,
+        "duplicate_attempts_count": duplicate_attempts_count,
         "exact_integer_ratio_operator_fraction": (
             exact_integer_ratio_operator_count / total_operators if total_operators else 0.0
         ),
@@ -246,6 +314,69 @@ def collect(
 def monitor() -> None:
     """Print the TensorBoard command for the local runs/ directory."""
     typer.echo("tensorboard --logdir runs")
+
+
+@app.command(name="train-forward")
+def train_forward(
+    corpus: Path = typer.Argument(..., help="Native-observation corpus."),
+    checkpoint_dir: Path = typer.Option(Path("checkpoints/forward"), help="Checkpoint directory."),
+    epochs: int = typer.Option(1, min=1),
+    max_steps: int | None = typer.Option(None, min=1),
+    max_rows: int | None = typer.Option(None, min=1),
+    batch_size: int = typer.Option(4, min=1),
+    learning_rate: float = typer.Option(1e-3, min=0.0),
+    device: str = typer.Option("auto", help="cpu, cuda, or auto."),
+    seed: int = typer.Option(0),
+    tensorboard_dir: Path | None = typer.Option(None, help="TensorBoard log directory (optional)."),
+    patience: int | None = typer.Option(None, min=1, help="Early-stopping patience: epochs without validation improvement before stopping."),
+) -> None:
+    """Train the bounded Phase 3 forward model on train/validation only."""
+    from .forward_training import TrainConfig, train
+
+    config = TrainConfig(
+        corpus=corpus,
+        checkpoint_dir=checkpoint_dir,
+        epochs=epochs,
+        max_steps=max_steps,
+        max_rows=max_rows,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        device=device,
+        seed=seed,
+        tensorboard_dir=tensorboard_dir,
+        patience=patience,
+    )
+    typer.echo(json.dumps(train(config), indent=2))
+
+
+@app.command(name="evaluate-forward")
+def evaluate_forward(
+    corpus: Path = typer.Argument(..., help="Native-observation corpus."),
+    checkpoint: Path = typer.Argument(..., help="Trained forward-model checkpoint."),
+    max_targets: int = typer.Option(32, min=1, help="Max held-out targets for ranking diagnostics."),
+    max_candidates: int = typer.Option(500, min=1, help="Max candidate pool size for ranking diagnostics."),
+    device: str = typer.Option("cpu", help="cpu, cuda, or auto."),
+    seed: int = typer.Option(0, help="Deterministic seed for target/candidate sampling."),
+) -> None:
+    """Evaluate a trained forward checkpoint on the protected test split."""
+    from .forward_eval import evaluate_forward as run_eval_forward
+
+    summary = run_eval_forward(
+        corpus, checkpoint, device=device,
+        max_targets=max_targets, max_candidates=max_candidates, seed=seed,
+    )
+    typer.echo(json.dumps(summary, indent=2))
+
+
+@app.command()
+def gui(
+    dataset: Path = typer.Option(Path("datasets/main.parquet"), help="Dataset to create or resume."),
+    max_renders: int = typer.Option(12000, min=1, help="Cumulative render cap for the Phase 2 operator gate."),
+    seed: int = typer.Option(42, help="Deterministic sampling seed."),
+) -> None:
+    """Show progress for the documented Phase 2 operator-gate sampling profile."""
+    from .gui import launch
+    launch(dataset, max_renders=max_renders, seed=seed)
 
 
 if __name__ == "__main__":
