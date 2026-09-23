@@ -368,6 +368,84 @@ def evaluate_forward(
     typer.echo(json.dumps(summary, indent=2))
 
 
+@app.command(name="generate-targets")
+def generate_targets(
+    folder: Path = typer.Option(Path("datasets/target-wavetables"), help="Output folder for generated target wavetables."),
+    tables: int = typer.Option(10, min=1, help="Number of wavetables to generate."),
+    frame_size: int = typer.Option(2048, min=128, help="Samples per frame (canonical target frame is 2048)."),
+    frame_count: int = typer.Option(256, min=1, help="Frames per table (canonical target count is 256)."),
+    seed: int = typer.Option(42, help="Deterministic generation seed."),
+    zip_delete: bool = typer.Option(False, help="Zip the generated WAVs, then delete the loose WAVs."),
+) -> None:
+    """Generate deterministic black-box target wavetables (curriculum producer).
+
+    Produces the 'generated hard wavetable curriculum' consumed by the inverse
+    search / active-learning pipeline as black-box targets. Generator
+    provenance never enters target records -- route through
+    ``dexfrag target-ingest`` to create waveform-derived target records.
+    """
+    from .curriculum import APP_NAME, GeneratorConfig, generate_wavetables
+
+    config = GeneratorConfig(
+        tables=tables,
+        frame_size=frame_size,
+        frame_count=frame_count,
+        seed=seed,
+        zip_and_delete=zip_delete,
+        folder=folder,
+    )
+    last_stage: str | None = None
+    last_percent = -5.0
+
+    def progress(update):
+        nonlocal last_stage, last_percent
+        stage_changed = update.stage != last_stage
+        enough_progress = update.overall_percent >= last_percent + 5.0
+        finished = update.overall_percent >= 100.0
+        if stage_changed or enough_progress or finished:
+            print(f"[{update.overall_percent:6.2f}%] {update.message}")
+            last_stage = update.stage
+            last_percent = update.overall_percent
+
+    print(APP_NAME)
+    print(
+        f"Tables={config.tables} | Frame size={config.frame_size} | "
+        f"Frames={config.frame_count} | Seed={config.seed}"
+    )
+    try:
+        created_files, archive_path = generate_wavetables(config, progress=progress)
+    except (ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise typer.Exit(code=1)
+    typer.echo(
+        json.dumps(
+            {
+                "tables_created": len(created_files),
+                "folder": str(Path(config.folder).expanduser().resolve()),
+                "archive": str(archive_path) if archive_path else None,
+            },
+            indent=2,
+        )
+    )
+
+
+@app.command(name="target-ingest")
+def target_ingest(
+    folder: Path = typer.Argument(..., help="Folder of generated target wavetables (*.wav)."),
+    output: Path = typer.Option(Path("datasets/target-records.parquet"), help="Target-records Parquet output."),
+    experiment_id: str = typer.Option("curriculum-v1", help="Opaque experiment id (allow-listed target bookkeeping)."),
+) -> None:
+    """Ingest generated wavetables as black-box target records.
+
+    Every frame becomes one TARGET_RECORD_SCHEMA row carrying waveform-derived
+    features only (validate_wavetable + black_box_target_features). Generator
+    provenance (seed, recipe, multiplex count, ...) is rejected at the
+    boundary by FORBIDDEN_TARGET_KEYS.
+    """
+    from .targets import ingest_wavetable_folder
+
+    summary = ingest_wavetable_folder(folder, output, experiment_id=experiment_id)
+    typer.echo(json.dumps(summary, indent=2))
 @app.command()
 def gui(
     dataset: Path = typer.Option(Path("datasets/main.parquet"), help="Dataset to create or resume."),

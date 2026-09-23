@@ -262,3 +262,40 @@ def observation_row_from_capture(capture, canonical_frames: dict, *, acquisition
         "split_scheme_version": SPLIT_SCHEME_VERSION,
         "created_at": capture.rendered_at,
     }
+
+
+TARGET_RECORD_SCHEMA_VERSION = "dexfrag-target-record-v1"
+
+
+def read_target_records(path: Path | str) -> pa.Table:
+    """Read a black-box target-record store (empty table when missing)."""
+    path = Path(path)
+    if not path.exists():
+        return TARGET_RECORD_SCHEMA.empty_table()
+    return pq.read_table(path, schema=TARGET_RECORD_SCHEMA)
+
+
+def append_target_records(path: Path | str, rows: list[dict]) -> pa.Table:
+    """Append target-record rows to the derived target store, skipping exact
+    ``target_hash`` duplicates via an atomic single-file rewrite.
+
+    Mirror of ``append_observations``' single-file path for the derived
+    target-records table. Target records are regenerable experiment data and
+    stay physically separate from permanent native observations.
+    """
+    path = Path(path)
+    existing = read_target_records(path)
+    existing_hashes = (
+        set(existing.column("target_hash").to_pylist()) if existing.num_rows else set()
+    )
+    new_rows: list[dict] = []
+    for row in rows:
+        if row["target_hash"] not in existing_hashes:
+            existing_hashes.add(row["target_hash"])
+            new_rows.append(row)
+    if not new_rows:
+        return existing
+    new_table = pa.Table.from_pylist(new_rows, schema=TARGET_RECORD_SCHEMA)
+    combined = pa.concat_tables([existing, new_table]) if existing.num_rows else new_table
+    _atomic_write_table(path, combined)
+    return combined
