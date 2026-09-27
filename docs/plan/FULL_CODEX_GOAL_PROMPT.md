@@ -1144,4 +1144,3 @@ When the current phase is complete, STOP and report:
 9. confirmation that you did **not** start the next phase.
 
 Do not continue past the current STOP gate.
-
