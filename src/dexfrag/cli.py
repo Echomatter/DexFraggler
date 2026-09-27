@@ -368,6 +368,82 @@ def evaluate_forward(
     typer.echo(json.dumps(summary, indent=2))
 
 
+@app.command(name="train-proposer")
+def train_proposer(
+    corpus: Path = typer.Argument(..., help="Native-observation corpus."),
+    checkpoint_dir: Path = typer.Option(Path("checkpoints/proposer"), help="Checkpoint directory."),
+    epochs: int = typer.Option(1, min=1),
+    max_steps: int | None = typer.Option(None, min=1),
+    max_rows: int | None = typer.Option(2048, min=2, help="Maximum train plus validation observations retained for this run."),
+    batch_size: int = typer.Option(8, min=1),
+    learning_rate: float = typer.Option(1e-3, min=0.0),
+    device: str = typer.Option("auto", help="cpu, cuda, or auto."),
+    seed: int = typer.Option(0),
+    tensorboard_dir: Path | None = typer.Option(None, help="TensorBoard log directory (optional)."),
+    patience: int | None = typer.Option(None, min=1),
+    max_seconds: float | None = typer.Option(None, min=0.0),
+    candidate_count: int = typer.Option(16, min=1, max=256),
+    label_smoothing: float = typer.Option(0.05, min=0.0),
+) -> None:
+    """Train the bounded Phase 4 distribution proposer on train/validation only."""
+    from .proposer_training import ProposerTrainConfig, train
+
+    config = ProposerTrainConfig(
+        corpus=corpus,
+        checkpoint_dir=checkpoint_dir,
+        epochs=epochs,
+        max_steps=max_steps,
+        max_rows=max_rows,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        device=device,
+        seed=seed,
+        tensorboard_dir=tensorboard_dir,
+        patience=patience,
+        max_seconds=max_seconds,
+        candidate_count=candidate_count,
+        label_smoothing=label_smoothing,
+    )
+    typer.echo(json.dumps(train(config), indent=2))
+
+
+@app.command(name="evaluate-proposer")
+def evaluate_proposer(
+    corpus: Path = typer.Argument(..., help="Native-observation corpus."),
+    checkpoint: Path = typer.Argument(..., help="Trained proposer checkpoint."),
+    forward_checkpoint: Path | None = typer.Option(None, help="Optional Phase 3 forward checkpoint for surrogate ranking."),
+    max_targets: int = typer.Option(8, min=1),
+    candidate_count: int = typer.Option(16, min=1, max=256),
+    native_budget: int = typer.Option(4, min=0, max=64),
+    max_total_renders: int = typer.Option(16, min=0),
+    device: str = typer.Option("cpu", help="cpu, cuda, or auto."),
+    seed: int = typer.Option(0),
+    temperature: float = typer.Option(1.0, min=0.0),
+    include_baselines: bool = typer.Option(True, help="Include random, structured, and retrieval baselines."),
+    report: Path | None = typer.Option(None, help="Optional JSON report output path."),
+) -> None:
+    """Evaluate legal candidate diversity, optional forward ranking, and bounded native quality."""
+    from .proposer_eval import evaluate_proposer as run_evaluate_proposer
+    from .proposer_eval import write_evaluation_report
+
+    summary = run_evaluate_proposer(
+        corpus,
+        checkpoint,
+        forward_checkpoint=forward_checkpoint,
+        device=device,
+        max_targets=max_targets,
+        candidate_count=candidate_count,
+        native_budget=native_budget,
+        max_total_renders=max_total_renders,
+        seed=seed,
+        temperature=temperature,
+        include_baselines=include_baselines,
+    )
+    if report is not None:
+        summary["report_path"] = str(write_evaluation_report(summary, report))
+    typer.echo(json.dumps(summary, indent=2))
+
+
 @app.command(name="generate-targets")
 def generate_targets(
     folder: Path = typer.Option(Path("datasets/target-wavetables"), help="Output folder for generated target wavetables."),
@@ -446,6 +522,8 @@ def target_ingest(
 
     summary = ingest_wavetable_folder(folder, output, experiment_id=experiment_id)
     typer.echo(json.dumps(summary, indent=2))
+
+
 @app.command()
 def gui(
     dataset: Path = typer.Option(Path("datasets/main.parquet"), help="Dataset to create or resume."),
@@ -455,6 +533,28 @@ def gui(
     """Show progress for the documented Phase 2 operator-gate sampling profile."""
     from .gui import launch
     launch(dataset, max_renders=max_renders, seed=seed)
+
+
+@app.command(name="proposer-gui")
+def proposer_gui(
+    corpus: Path = typer.Option(Path("datasets/main.parquet"), help="Native-observation corpus."),
+    checkpoint_dir: Path = typer.Option(Path("checkpoints/inverse-proposer"), help="Checkpoint directory."),
+    forward_checkpoint: Path = typer.Option(Path("checkpoints/forward-operator/best.pt"), help="Phase 3 forward ranker for evaluation."),
+    report: Path = typer.Option(Path("reports/phase4.json"), help="Evaluation report output path."),
+    epochs: int = typer.Option(10, min=1, help="Training rounds to attempt."),
+    max_rows: int = typer.Option(2048, min=2, help="Maximum train plus validation observations retained."),
+    batch_size: int = typer.Option(8, min=1),
+    seed: int = typer.Option(0),
+    device: str = typer.Option("auto", help="cpu, cuda, or auto."),
+) -> None:
+    """Windowed Phase 4 proposer training with a live progress bar and counts."""
+    from .proposer_gui import launch
+
+    launch(
+        corpus, checkpoint_dir=checkpoint_dir, forward_checkpoint=forward_checkpoint,
+        report=report, epochs=epochs, max_rows=max_rows, batch_size=batch_size,
+        seed=seed, device=device,
+    )
 
 
 if __name__ == "__main__":

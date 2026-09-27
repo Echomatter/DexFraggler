@@ -1,0 +1,191 @@
+{
+  "corpus": "datasets\\main.parquet",
+  "checkpoint": "checkpoints\\inverse-proposer\\best.pt",
+  "forward_checkpoint": "checkpoints\\forward-operator\\best.pt",
+  "device": "cpu",
+  "model_version": "dexfrag-inverse-proposer-v2",
+  "loss_version": "dexfrag-proposer-distribution-ce-v3",
+  "parameter_count": 310862,
+  "model_config": {
+    "algorithm_dim": 16,
+    "hidden_dim": 128,
+    "harmonic_bands": 64,
+    "conv_channels": 32
+  },
+  "protected_split": "test",
+  "dataset_count": 8,
+  "candidate_count": 16,
+  "native_budget": 4,
+  "max_total_renders": 16,
+  "actual_native_renders": 16,
+  "native_error": null,
+  "forward_ranking_enabled": true,
+  "forward_checkpoint_info": {
+    "epoch": 15,
+    "completed_epochs": 16,
+    "global_step": 2528,
+    "best_val": 0.39188545746881454,
+    "model_version": "dexfrag-forward-mlp-v1",
+    "train_config": {
+      "corpus": "datasets\\main.parquet",
+      "checkpoint_dir": "checkpoints\\forward-operator",
+      "seed": 42,
+      "device": "auto",
+      "epochs": 50,
+      "max_steps": null,
+      "max_rows": null,
+      "batch_size": 16,
+      "learning_rate": 0.001,
+      "num_workers": 0,
+      "best_filename": "best.pt",
+      "last_filename": "last.pt",
+      "tensorboard_dir": "runs\\phase3-operator",
+      "patience": 8
+    },
+    "git_commit": "cb3625c3da52fc021462f5b01b781a2f77c53222",
+    "corpus_path": "datasets\\main.parquet",
+    "corpus_rows": 2645,
+    "feature_version": "dexfrag-canonical-frame-v1",
+    "scorer_version": "dexfrag-forward-waveform-mse-v1"
+  },
+  "methods": {
+    "proposer": {
+      "candidate": {
+        "count": 16.0,
+        "legal_count": 16.0,
+        "legal_rate": 1.0,
+        "unique_count": 16.0,
+        "unique_rate": 1.0,
+        "duplicate_collapse": 0.0,
+        "algorithm_diversity": 12.125,
+        "topology_diversity": 12.125,
+        "parameter_diversity": 0.12274096385542169,
+        "mean_pairwise_distance": 0.15881536342568348
+      },
+      "forward": {
+        "candidate_count": 16.0,
+        "mean_score": 0.004752908449972892
+      },
+      "native": {
+        "target_count": 8,
+        "targets_scored": 1,
+        "rendered_total": 4,
+        "render_errors": 0,
+        "mean_best_similarity": 0.17942408390837453,
+        "budget_curve": {
+          "1": 0.1775190882417849,
+          "4": 0.17942408390837453
+        }
+      }
+    },
+    "random_legal": {
+      "candidate": {
+        "count": 16.0,
+        "legal_count": 16.0,
+        "legal_rate": 1.0,
+        "unique_count": 16.0,
+        "unique_rate": 1.0,
+        "duplicate_collapse": 0.0,
+        "algorithm_diversity": 12.375,
+        "topology_diversity": 12.375,
+        "parameter_diversity": 0.21636546184738956,
+        "mean_pairwise_distance": 0.3457730309891348
+      },
+      "forward": {
+        "candidate_count": 16.0,
+        "mean_score": 0.00702094157168176
+      },
+      "native": {
+        "target_count": 8,
+        "targets_scored": 1,
+        "rendered_total": 4,
+        "render_errors": 0,
+        "mean_best_similarity": 0.18019999953363056,
+        "budget_curve": {
+          "1": 0.18019999953363056,
+          "4": 0.18019999953363056
+        }
+      }
+    },
+    "broad_structured": {
+      "candidate": {
+        "count": 16.0,
+        "legal_count": 16.0,
+        "legal_rate": 1.0,
+        "unique_count": 16.0,
+        "unique_rate": 1.0,
+        "duplicate_collapse": 0.0,
+        "algorithm_diversity": 16.0,
+        "topology_diversity": 16.0,
+        "parameter_diversity": 0.2162817938420348,
+        "mean_pairwise_distance": 0.35988912532826345
+      },
+      "forward": {
+        "candidate_count": 16.0,
+        "mean_score": 0.007457947588591196
+      },
+      "native": {
+        "target_count": 8,
+        "targets_scored": 1,
+        "rendered_total": 4,
+        "render_errors": 0,
+        "mean_best_similarity": 0.22150147940634224,
+        "budget_curve": {
+          "1": 0.17622572418166843,
+          "4": 0.22150147940634224
+        }
+      }
+    },
+    "nearest_native": {
+      "candidate": {
+        "count": 16.0,
+        "legal_count": 16.0,
+        "legal_rate": 1.0,
+        "unique_count": 16.0,
+        "unique_rate": 1.0,
+        "duplicate_collapse": 0.0,
+        "algorithm_diversity": 9.5,
+        "topology_diversity": 9.5,
+        "parameter_diversity": 0.07228915662650602,
+        "mean_pairwise_distance": 0.06703550542386227
+      },
+      "forward": {
+        "candidate_count": 16.0,
+        "mean_score": 0.0037276481843946385
+      },
+      "native": {
+        "target_count": 8,
+        "targets_scored": 1,
+        "rendered_total": 4,
+        "render_errors": 0,
+        "mean_best_similarity": 0.3183213976554335,
+        "budget_curve": {
+          "1": 0.30426255640934413,
+          "4": 0.3183213976554335
+        }
+      }
+    }
+  },
+  "failure_examples": [
+    {
+      "target_hash": "636363636363630027000000000000005e00010007636363636363630027000000000000003500020007636363636363630027000000000000003400010007636363636363630027000000000000005200060007636363636363630027000000000000005b000600076363636363636300270000000000000043000200076363636332323232120601000000000004001844455846524147202020",
+      "reason": "low_native_similarity",
+      "method": "proposer"
+    },
+    {
+      "target_hash": "636363636363630027000000000000005e00010007636363636363630027000000000000003500020007636363636363630027000000000000003400010007636363636363630027000000000000005200060007636363636363630027000000000000005b000600076363636363636300270000000000000043000200076363636332323232120601000000000004001844455846524147202020",
+      "reason": "low_native_similarity",
+      "method": "random_legal"
+    },
+    {
+      "target_hash": "636363636363630027000000000000005e00010007636363636363630027000000000000003500020007636363636363630027000000000000003400010007636363636363630027000000000000005200060007636363636363630027000000000000005b000600076363636363636300270000000000000043000200076363636332323232120601000000000004001844455846524147202020",
+      "reason": "low_native_similarity",
+      "method": "broad_structured"
+    },
+    {
+      "target_hash": "636363636363630027000000000000005e00010007636363636363630027000000000000003500020007636363636363630027000000000000003400010007636363636363630027000000000000005200060007636363636363630027000000000000005b000600076363636363636300270000000000000043000200076363636332323232120601000000000004001844455846524147202020",
+      "reason": "low_native_similarity",
+      "method": "nearest_native"
+    }
+  ]
+}

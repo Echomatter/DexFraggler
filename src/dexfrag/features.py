@@ -234,6 +234,7 @@ def black_box_target_features(waveform: Sequence[float], *, bookkeeping: dict | 
     return {
         "version": FEATURE_VERSION,
         "frame_length": n,
+        "samples": audio.tolist(),
         "rms": math.sqrt(energy / n) if n else 0.0,
         "peak": float(np.max(np.abs(audio))) if n else 0.0,
         "sin_coefficients": sin_coeffs,
