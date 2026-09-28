@@ -317,6 +317,14 @@ def load_checkpoint(
     for key in ("model_state", "epoch", "global_step", "best_val"):
         if key not in payload:
             raise ValueError(f"checkpoint is missing required key: {key}")
+    saved_version = payload.get("model_version")
+    if saved_version is not None and saved_version != MODEL_VERSION:
+        raise ValueError(
+            f"checkpoint model_version {saved_version!r} does not match "
+            f"current {MODEL_VERSION!r}; retrain into a new checkpoint "
+            "directory instead of reusing v1 checkpoints (v1 files stay "
+            "valid for the v1 model only)"
+        )
     model.load_state_dict(payload["model_state"])
     if optimizer is not None and "optimizer_state" in payload:
         optimizer.load_state_dict(payload["optimizer_state"])

@@ -3,13 +3,20 @@ import pytest
 import torch
 
 from dexfrag.algorithms import topology_for
+from dexfrag.features import canonical_frame
 from dexfrag.forward_metrics import forward_loss
 from dexfrag.forward_model import (
+    FRAME_LENGTH,
+    MAX_BANDS,
+    NOTE_BANDS,
+    NOTE_MIDIS,
     ForwardModel,
     MODEL_VERSION,
     encode_conditioning,
     normalize_feedback,
     normalize_operators,
+    note_bands,
+    synthesize_frames,
     topology_features,
 )
 
@@ -33,7 +40,7 @@ def make_batch(size=4):
 
 
 def test_model_version_pinned():
-    assert MODEL_VERSION == "dexfrag-forward-mlp-v1"
+    assert MODEL_VERSION == "dexfrag-forward-mlp-v2"
 
 
 def test_normalization_ranges_and_determinism():
@@ -153,3 +160,68 @@ def test_forward_cuda_device_consistency():
     assert out.device == device
     assert out.shape == (2, 3, 2048)
     assert torch.isfinite(out).all()
+
+
+def test_note_bands_match_canonical_frame_contract():
+    assert NOTE_MIDIS == (45, 57, 69)
+    assert NOTE_BANDS == (217, 108, 53)
+    assert MAX_BANDS == 217
+    for note in NOTE_MIDIS:
+        frame = canonical_frame([0.0] * 4096, note)
+        assert frame.frame_length == FRAME_LENGTH
+        assert frame.bands == note_bands(note)
+    with pytest.raises(ValueError):
+        note_bands(-1)
+    with pytest.raises(ValueError):
+        note_bands(128)
+
+
+def test_synthesize_frames_inverts_canonical_frame():
+    import math
+
+    note = 69
+    base = 440.0 * 2.0 ** ((note - 69) / 12.0)
+    capture = [0.0] * 4096
+    true_sin = [0.02 * ((k % 5) + 1) for k in range(1, 11)]
+    true_cos = [0.015 * ((k % 3) + 1) for k in range(1, 11)]
+    for i in range(4096):
+        capture[i] = sum(
+            true_sin[k] * math.sin(2.0 * math.pi * (k + 1) * base * i / 48000.0)
+            + true_cos[k] * math.cos(2.0 * math.pi * (k + 1) * base * i / 48000.0)
+            for k in range(10)
+        )
+    frame = canonical_frame(capture, note)
+    assert frame.bands == NOTE_BANDS[2]
+    sin_padded = torch.zeros(1, 3, MAX_BANDS, dtype=torch.float32)
+    cos_padded = torch.zeros(1, 3, MAX_BANDS, dtype=torch.float32)
+    sin_padded[0, 2, :frame.bands] = torch.tensor(frame.sin_coefficients, dtype=torch.float32)
+    cos_padded[0, 2, :frame.bands] = torch.tensor(frame.cos_coefficients, dtype=torch.float32)
+    rendered = synthesize_frames(sin_padded, cos_padded)
+    assert rendered.shape == (1, 3, FRAME_LENGTH)
+    expected = torch.tensor(frame.samples, dtype=torch.float32)
+    assert torch.allclose(rendered[0, 2], expected, atol=1e-4, rtol=1e-3)
+    # Zero coefficients synthesize exact silence on every note.
+    silent = synthesize_frames(torch.zeros(2, 3, MAX_BANDS), torch.zeros(2, 3, MAX_BANDS))
+    assert silent.shape == (2, 3, FRAME_LENGTH)
+    assert bool((silent == 0).all())
+
+
+def test_synthesize_frames_rejects_bad_inputs():
+    good = torch.zeros(1, 3, MAX_BANDS)
+    with pytest.raises(ValueError):
+        synthesize_frames(torch.zeros(1, 3, MAX_BANDS - 1), good)
+    with pytest.raises(ValueError):
+        synthesize_frames(good, torch.zeros(1, 3, MAX_BANDS, dtype=torch.long))
+    bad = torch.zeros(1, 3, MAX_BANDS)
+    bad[0, 0, 0] = float("inf")
+    with pytest.raises(ValueError):
+        synthesize_frames(bad, good)
+    with pytest.raises(ValueError):
+        synthesize_frames(good, torch.zeros(2, 3, MAX_BANDS))
+
+
+def test_harmonic_head_exactly_sized_and_smaller():
+    model = ForwardModel()
+    assert [head.out_features for head in model.coeff_heads] == [2 * b for b in NOTE_BANDS]
+    assert model.count_parameters() == 679684
+    assert model.count_parameters() < 1659664  # v1 raw-sample head size

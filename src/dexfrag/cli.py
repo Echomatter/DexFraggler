@@ -23,6 +23,18 @@ app = typer.Typer(no_args_is_help=True, add_completion=False)
 @app.command()
 def doctor(executable: Path = typer.Option(DEFAULT_EXECUTABLE, help="Native renderer executable path.")) -> None:
     """Validate the local environment end to end, including one bounded native render."""
+    report = doctor_report(executable)
+    typer.echo(json.dumps(report, indent=2))
+    if not report["ok"]:
+        raise typer.Exit(code=1)
+
+
+def doctor_report(executable: Path = DEFAULT_EXECUTABLE) -> dict:
+    """Run the end-to-end environment checks and return the report dict.
+
+    Factored out of the ``doctor`` command so the operator console can run
+    the identical checks without going through the CLI layer.
+    """
     report: dict = {"version": __version__, "checks": {}, "ok": True}
 
     def check(name: str, fn):
@@ -94,10 +106,7 @@ def doctor(executable: Path = typer.Option(DEFAULT_EXECUTABLE, help="Native rend
     check("algorithm_topology", check_algorithm_topology)
     check("native_render", check_native_render)
     check("canonical_frame_extraction", check_canonical_frame)
-
-    typer.echo(json.dumps(report, indent=2))
-    if not report["ok"]:
-        raise typer.Exit(code=1)
+    return report
 
 
 @app.command(name="structure-audit")
@@ -368,6 +377,51 @@ def evaluate_forward(
     typer.echo(json.dumps(summary, indent=2))
 
 
+@app.command(name="train-ranker")
+def train_ranker(
+    corpus: Path = typer.Argument(..., help="Native-observation corpus."),
+    checkpoint_dir: Path = typer.Option(Path("checkpoints/ranker"), help="Checkpoint directory."),
+    epochs: int = typer.Option(20, min=1),
+    max_steps: int | None = typer.Option(None, min=1),
+    max_rows: int | None = typer.Option(None, min=1),
+    batch_size: int = typer.Option(32, min=1),
+    learning_rate: float = typer.Option(1e-3, min=0.0),
+    device: str = typer.Option("auto", help="cpu, cuda, or auto."),
+    seed: int = typer.Option(0),
+    tensorboard_dir: Path | None = typer.Option(None, help="TensorBoard log directory (optional)."),
+    patience: int | None = typer.Option(6, min=1, help="Early-stopping patience without validation improvement."),
+) -> None:
+    """Train the bounded Phase 3b compatibility ranker on train/validation only."""
+    from .ranker import RankerTrainConfig, train
+
+    config = RankerTrainConfig(
+        corpus=corpus, checkpoint_dir=checkpoint_dir, epochs=epochs,
+        max_steps=max_steps, max_rows=max_rows, batch_size=batch_size,
+        learning_rate=learning_rate, device=device, seed=seed,
+        tensorboard_dir=tensorboard_dir, patience=patience,
+    )
+    typer.echo(json.dumps(train(config), indent=2))
+
+
+@app.command(name="evaluate-ranker")
+def evaluate_ranker(
+    corpus: Path = typer.Argument(..., help="Native-observation corpus."),
+    checkpoint: Path = typer.Argument(..., help="Trained ranker checkpoint."),
+    max_targets: int = typer.Option(32, min=1, help="Max held-out targets for ranking diagnostics."),
+    max_candidates: int = typer.Option(500, min=1, help="Max candidate pool size for ranking diagnostics."),
+    device: str = typer.Option("cpu", help="cpu, cuda, or auto."),
+    seed: int = typer.Option(0, help="Deterministic seed for target/candidate sampling."),
+) -> None:
+    """Evaluate a trained ranker checkpoint on the protected test split."""
+    from .ranker import evaluate_ranker as run_evaluate_ranker
+
+    summary = run_evaluate_ranker(
+        corpus, checkpoint, device=device,
+        max_targets=max_targets, max_candidates=max_candidates, seed=seed,
+    )
+    typer.echo(json.dumps(summary, indent=2))
+
+
 @app.command(name="train-proposer")
 def train_proposer(
     corpus: Path = typer.Argument(..., help="Native-observation corpus."),
@@ -555,6 +609,16 @@ def proposer_gui(
         report=report, epochs=epochs, max_rows=max_rows, batch_size=batch_size,
         seed=seed, device=device,
     )
+
+
+@app.command(name="operator-gui")
+def operator_gui(
+    corpus: Path = typer.Option(Path("datasets/main.parquet"), help="Native-observation corpus."),
+) -> None:
+    """Guided operator console: every roadmap step in one window, in order."""
+    from .operator_app import launch
+
+    launch(corpus)
 
 
 if __name__ == "__main__":

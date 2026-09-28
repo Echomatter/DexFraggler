@@ -168,12 +168,24 @@ def test_save_load_roundtrip(tmp_path):
     # completed_epochs defaults to epoch + 1 for end-of-epoch saves.
     assert state["completed_epochs"] == 3
     # Checkpoint provenance capture.
-    assert state["model_version"] == "dexfrag-forward-mlp-v1"
+    assert state["model_version"] == "dexfrag-forward-mlp-v2"
     assert state["feature_version"] == FEATURE_VERSION == DATA_FEATURE_VERSION
     assert state["scorer_version"] == SCORER_VERSION
     assert isinstance(state["git_commit"], str)
     for a, b in zip(model.parameters(), revived.parameters()):
         assert torch.equal(a, b)
+
+
+def test_load_checkpoint_rejects_foreign_model_version(tmp_path):
+    model = ForwardModel(hidden_dims=(16, 16), algorithm_dim=4)
+    path = tmp_path / "last.pt"
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    save_checkpoint(path, model, optimizer, epoch=0, global_step=1, best_val=1.0)
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    payload["model_version"] = "dexfrag-forward-mlp-v1"
+    torch.save(payload, path)
+    with pytest.raises(ValueError):
+        load_checkpoint(path, ForwardModel(hidden_dims=(16, 16), algorithm_dim=4))
 
 
 def test_save_checkpoint_provenance_from_train(corpus, tmp_path):
